@@ -27,7 +27,8 @@ def _connect() -> sqlite3.Connection:
             first_seen REAL,
             last_seen REAL,
             lat REAL,
-            lon REAL
+            lon REAL,
+            whitelisted INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
@@ -37,6 +38,11 @@ def _connect() -> sqlite3.Connection:
         INSERT OR IGNORE INTO counters(name, value) VALUES ('pcap_bytes', 0);
         """
     )
+    # Migration for dbs created before the whitelisted column existed.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(networks)").fetchall()}
+    if "whitelisted" not in cols:
+        conn.execute("ALTER TABLE networks ADD COLUMN whitelisted INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
     return conn
 
 
@@ -53,6 +59,9 @@ class GpsFix:
 @dataclass
 class State:
     iface: str = "wlan0"
+    # Once monitor mode is on, this may differ from `iface` (airmon-ng creates
+    # e.g. wlan0mon). pcap captures from monitor_iface.
+    monitor_iface: str = ""
     monitor_on: bool = False
     pcap_on: bool = False
     last_scan_ts: float = 0.0
@@ -64,8 +73,33 @@ class State:
     status_msg: str = "idle"
 
     def total_networks(self) -> int:
-        cur = self.db.execute("SELECT COUNT(*) FROM networks")
+        cur = self.db.execute(
+            "SELECT COUNT(*) FROM networks WHERE whitelisted=0"
+        )
         return int(cur.fetchone()[0])
+
+    def is_whitelisted(self, bssid: str) -> bool:
+        cur = self.db.execute(
+            "SELECT whitelisted FROM networks WHERE bssid=?", (bssid,)
+        )
+        row = cur.fetchone()
+        return bool(row[0]) if row else False
+
+    def set_whitelist(self, bssid: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE networks SET whitelisted=? WHERE bssid=?",
+            (1 if on else 0, bssid),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def whitelist_by_ssid(self, ssid: str, on: bool) -> int:
+        cur = self.db.execute(
+            "UPDATE networks SET whitelisted=? WHERE ssid=?",
+            (1 if on else 0, ssid),
+        )
+        self.db.commit()
+        return cur.rowcount
 
     def total_packets(self) -> int:
         cur = self.db.execute("SELECT value FROM counters WHERE name='packets'")
@@ -89,15 +123,31 @@ class State:
         now = time.time()
         lat = self.gps.lat if self.gps.have_fix else None
         lon = self.gps.lon if self.gps.have_fix else None
-        cur = self.db.execute("SELECT bssid FROM networks WHERE bssid=?", (bssid,))
-        new = cur.fetchone() is None
+        cur = self.db.execute(
+            "SELECT bssid, whitelisted FROM networks WHERE bssid=?", (bssid,)
+        )
+        row = cur.fetchone()
+        new = row is None
+        # An SSID-level whitelist applies to newly-discovered BSSIDs that
+        # match a known whitelisted SSID. That way "whitelist Verizon-Home"
+        # also covers the next BSSID the same SSID broadcasts on.
+        whitelisted = 0
+        if new and ssid:
+            cur2 = self.db.execute(
+                "SELECT 1 FROM networks WHERE ssid=? AND whitelisted=1 LIMIT 1",
+                (ssid,),
+            )
+            if cur2.fetchone() is not None:
+                whitelisted = 1
         if new:
             self.db.execute(
                 "INSERT INTO networks(bssid, ssid, channel, signal, encryption, "
-                "first_seen, last_seen, lat, lon) VALUES (?,?,?,?,?,?,?,?,?)",
-                (bssid, ssid, channel, signal, encryption, now, now, lat, lon),
+                "first_seen, last_seen, lat, lon, whitelisted) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (bssid, ssid, channel, signal, encryption, now, now, lat, lon, whitelisted),
             )
-            self.new_bssids_window += 1
+            if not whitelisted:
+                self.new_bssids_window += 1
         else:
             self.db.execute(
                 "UPDATE networks SET ssid=COALESCE(NULLIF(?, ''), ssid), "
@@ -107,7 +157,7 @@ class State:
                 (ssid, channel, signal, encryption, now, lat, lon, bssid),
             )
         self.db.commit()
-        return new
+        return new and not whitelisted
 
     def add_packets(self, n: int, bytes_: int = 0) -> None:
         if n <= 0 and bytes_ <= 0:

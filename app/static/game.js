@@ -501,10 +501,24 @@
   // ============================================================
   const btnGps = document.getElementById("btn-gps");
   let gpsWatch = null;
+  function gpsErrLabel(err) {
+    if (err.code === 1) return "DENIED";
+    if (err.code === 2) return "NO FIX";
+    if (err.code === 3) return "TIMEOUT";
+    return "ERR";
+  }
   btnGps.addEventListener("click", () => {
     if (!("geolocation" in navigator)) {
       btnGps.dataset.err = "1";
       btnGps.textContent = "GPS: UNAVAIL";
+      return;
+    }
+    if (!window.isSecureContext) {
+      // Browsers refuse Geolocation on insecure origins. Surface clearly
+      // rather than failing silently.
+      btnGps.dataset.err = "1";
+      btnGps.textContent = "GPS: HTTPS REQ";
+      statusEl.textContent = "Geolocation needs HTTPS. Use https://<host>:8443/ and accept the cert.";
       return;
     }
     if (gpsWatch !== null) {
@@ -534,10 +548,117 @@
       },
       (err) => {
         btnGps.dataset.err = "1";
-        btnGps.textContent = `GPS: ${err.code === 1 ? "DENIED" : "ERR"}`;
+        btnGps.textContent = `GPS: ${gpsErrLabel(err)}`;
+        statusEl.textContent = `gps error: ${err.message || err.code}`;
         gpsWatch = null;
       },
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
     );
+  });
+
+  // ============================================================
+  //  Settings panel — whitelist
+  // ============================================================
+  const modal = document.getElementById("settings");
+  const btnSettings = document.getElementById("btn-settings");
+  const btnCloseSettings = document.getElementById("btn-close-settings");
+  const btnRefresh = document.getElementById("btn-refresh");
+  const btnSaveWl = document.getElementById("btn-save-wl");
+  const filterEl = document.getElementById("filter");
+  const tbody = document.getElementById("net-tbody");
+  const wlCount = document.getElementById("wl-count");
+
+  let netCache = [];
+  let pendingWl = new Set(); // bssids ticked in the UI
+
+  async function loadNetworks() {
+    const r = await fetch("/api/networks?limit=2000");
+    if (!r.ok) return;
+    netCache = await r.json();
+    pendingWl = new Set(netCache.filter(n => n.whitelisted).map(n => n.bssid));
+    renderNetworks();
+  }
+
+  function renderNetworks() {
+    const q = (filterEl.value || "").trim().toLowerCase();
+    const rows = netCache
+      .filter(n =>
+        !q ||
+        (n.ssid || "").toLowerCase().includes(q) ||
+        (n.bssid || "").toLowerCase().includes(q)
+      )
+      .sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+
+    tbody.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    rows.forEach(n => {
+      const tr = document.createElement("tr");
+      const wl = pendingWl.has(n.bssid);
+      if (wl) tr.classList.add("wl");
+      tr.innerHTML =
+        `<td><input type="checkbox" data-bssid="${n.bssid}" ${wl ? "checked" : ""}></td>` +
+        `<td>${escapeHtml(n.ssid || "(hidden)")}</td>` +
+        `<td class="bssid">${n.bssid}</td>` +
+        `<td>${n.channel ?? "-"}</td>` +
+        `<td class="sig">${n.signal != null ? n.signal + " dBm" : "-"}</td>` +
+        `<td>${n.encryption || "-"}</td>` +
+        `<td>${formatAge(n.last_seen)}</td>`;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    wlCount.textContent = `${pendingWl.size} whitelisted`;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function formatAge(ts) {
+    if (!ts) return "-";
+    const dt = (Date.now() / 1000) - ts;
+    if (dt < 60) return `${Math.round(dt)}s`;
+    if (dt < 3600) return `${Math.round(dt / 60)}m`;
+    return `${Math.round(dt / 3600)}h`;
+  }
+
+  tbody.addEventListener("change", (ev) => {
+    const cb = ev.target.closest('input[type="checkbox"]');
+    if (!cb) return;
+    const bssid = cb.dataset.bssid;
+    if (cb.checked) pendingWl.add(bssid); else pendingWl.delete(bssid);
+    cb.closest("tr").classList.toggle("wl", cb.checked);
+    wlCount.textContent = `${pendingWl.size} whitelisted`;
+  });
+
+  filterEl.addEventListener("input", renderNetworks);
+  btnRefresh.addEventListener("click", loadNetworks);
+
+  btnSaveWl.addEventListener("click", async () => {
+    btnSaveWl.disabled = true;
+    try {
+      const r = await fetch("/api/whitelist", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bssids: Array.from(pendingWl), ssids: [] }),
+      });
+      const j = await r.json();
+      statusEl.textContent = `whitelist saved (${j.whitelisted_count})`;
+      await loadNetworks();
+    } catch (e) {
+      statusEl.textContent = `save failed: ${e}`;
+    } finally {
+      btnSaveWl.disabled = false;
+    }
+  });
+
+  btnSettings.addEventListener("click", async () => {
+    modal.hidden = false;
+    await loadNetworks();
+  });
+  btnCloseSettings.addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) modal.hidden = true;
   });
 })();
