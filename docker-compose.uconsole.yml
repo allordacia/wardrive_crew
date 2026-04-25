@@ -1,0 +1,39 @@
+# uConsole + Hackergadgets AIO v2 overlay.
+#
+# Use with the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.uconsole.yml up --build
+#
+# Defaults assume a CM4-based uConsole. For CM5 set:
+#   WARDRIVE_GPS_DEVICE=/dev/ttyAMA0
+#
+# The MT7921AUN on the AIO v2 typically shows up as wlan1 (the host's
+# built-in wifi keeps wlan0 for the management connection — that's the
+# whole point of using two radios on this build).
+
+services:
+  wardrive:
+    devices:
+      - "${WARDRIVE_GPS_DEVICE:-/dev/ttyS0}:${WARDRIVE_GPS_DEVICE:-/dev/ttyS0}"
+      - "/dev/gpiochip0:/dev/gpiochip0"
+      # RTC (PCF85063A on AIO v2). Harmless if absent on the host.
+      - "/dev/rtc0:/dev/rtc0"
+    # RTL-SDR is a USB device — pass the USB bus through. (Docker compose
+    # merges volume lists additively, so this adds to the base ./data
+    # bind without duplicating it.)
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      WARDRIVE_IFACE: "${WARDRIVE_IFACE:-wlan1}"
+      WARDRIVE_GPS_DEVICE: "${WARDRIVE_GPS_DEVICE:-/dev/ttyS0}"
+      WARDRIVE_GPS_BAUD: "${WARDRIVE_GPS_BAUD:-9600}"
+      # Pull hardware time from the AIO v2 RTC at startup.
+      WARDRIVE_RTC_SYNC: "${WARDRIVE_RTC_SYNC:-1}"
+      # Run the RTL-SDR sweep loop. Requires the RTL-SDR rail be powered
+      # on (aiov2_ctl sdr on) and rtl_power present in the container.
+      WARDRIVE_SDR_ENABLED: "${WARDRIVE_SDR_ENABLED:-0}"
+      # LoRa beacons. Empty = disabled. Set to the Meshtastic node's
+      # serial path (e.g. /dev/ttyACM0) once Meshtastic firmware is
+      # flashed onto the SX1262.
+      WARDRIVE_LORA_DEVICE: "${WARDRIVE_LORA_DEVICE:-}"
+      WARDRIVE_CREW_ID: "${WARDRIVE_CREW_ID:-}"

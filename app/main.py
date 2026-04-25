@@ -14,6 +14,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import scanner
+from . import gps_serial
+from . import rtc as rtc_mod
+from . import sdr as sdr_mod
+from . import lora as lora_mod
 from .state import STATE
 
 
@@ -27,13 +31,32 @@ log = logging.getLogger("wardrive")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _autodetect_preset() -> None:
+    """First-boot heuristic: if the AIO v2 hardware looks present and no
+    preset has been chosen yet, pick the safari preset (themed for off-grid)
+    so users running on a uConsole get a uConsole-flavoured scene by default.
+    """
+    if STATE.get_setting("scene_preset") is not None:
+        return
+    gps_dev = os.environ.get("WARDRIVE_GPS_DEVICE", "").strip()
+    has_aio_gps = bool(gps_dev) and Path(gps_dev).exists()
+    if has_aio_gps:
+        STATE.set_setting("scene_preset", "safari")
+        log.info("auto-selected 'safari' preset (AIO v2 GPS detected at %s)", gps_dev)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     STATE.iface = os.environ.get("WARDRIVE_IFACE", "wlan0")
     log.info("starting wardrive_crew on iface=%s", STATE.iface)
+    _autodetect_preset()
+    await rtc_mod.sync_rtc_at_startup()
     tasks = [
         asyncio.create_task(scanner.scan_loop(), name="scan_loop"),
         asyncio.create_task(scanner.decay_loop(), name="decay_loop"),
+        asyncio.create_task(gps_serial.gps_serial_loop(), name="gps_serial"),
+        asyncio.create_task(sdr_mod.sdr_loop(), name="sdr_loop"),
+        asyncio.create_task(lora_mod.lora_loop(), name="lora_loop"),
     ]
     if os.environ.get("WARDRIVE_AUTO_MONITOR", "0") == "1":
         try:
@@ -221,9 +244,26 @@ def _snapshot() -> dict:
         "networks_total": STATE.total_networks(),
         "packets_total": STATE.total_packets(),
         "pcap_bytes_total": STATE.total_pcap_bytes(),
+        "rf_signals_total": STATE.rf_signals_total,
         "speed_mph": round(STATE.speed_mph(), 1),
         "new_window": round(STATE.new_bssids_window, 2),
         "pkt_window": round(STATE.packets_window, 2),
+        "rf_window": round(STATE.rf_signals_window, 2),
+        "rtc_synced": STATE.rtc_synced,
+        "sdr_active": STATE.sdr_active,
+        "lora_active": STATE.lora_active,
+        "crew_id": STATE.crew_id,
+        "fleet": [
+            {
+                "crew_id": cid,
+                "score": b.get("score", 0),
+                "mph": b.get("mph", 0),
+                "lat": b.get("lat"),
+                "lon": b.get("lon"),
+                "age_s": round((time.time() - b.get("last_seen", 0)), 1),
+            }
+            for cid, b in STATE.fleet.items()
+        ],
         "gps": {
             "have_fix": STATE.gps.have_fix,
             "lat": STATE.gps.lat,

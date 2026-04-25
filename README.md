@@ -43,6 +43,30 @@ ip -o link | awk -F': ' '/wl/ {print $2}'   # e.g. wlan0, wlan1, wlx00...
 WARDRIVE_IFACE=wlan0 docker compose up --build
 ```
 
+### uConsole + Hackergadgets AIO v2
+
+The AIO v2 board's MT7921AUN wifi (monitor-mode capable) and onboard
+GNSS make this the recommended build. The host's built-in CM4/CM5 wifi
+keeps `wlan0` for the management connection so flipping the AIO into
+monitor mode doesn't kill your browser session.
+
+```bash
+# Run once on the host: enables UART, frees the GPS port from the kernel
+# console, powers on the GPS rail, detects the AIO wifi iface name.
+./scripts/uconsole-aio-setup.sh
+sudo reboot          # only if config.txt or cmdline.txt got edited
+
+# Then bring it up with the AIO overlay:
+docker compose -f docker-compose.yml -f docker-compose.uconsole.yml up --build
+```
+
+For CM5, also set `WARDRIVE_GPS_DEVICE=/dev/ttyAMA0` (CM4 default is
+`/dev/ttyS0`). When `WARDRIVE_GPS_DEVICE` is set the server reads NMEA
+directly off the UART — the GPS button in the UI is no longer needed
+and HTTPS isn't strictly required (the page still ships with HTTPS
+because Geolocation fallback would need it). If hardware is detected on
+first boot, the scene preset auto-selects "Safari Squad".
+
 Then open `https://<host>:8443/` on the device you want to use. The
 container generates a self-signed cert on first boot — your browser
 will warn about it; click "Advanced" → "Proceed". HTTPS is **required**
@@ -65,9 +89,39 @@ score (e.g. your own home AP).
 | `WARDRIVE_AUTO_MONITOR`     | `0`     | Set to `1` to start in monitor + pcap on boot.                               |
 | `WARDRIVE_USE_AIRMON`       | `1`     | Use `airmon-ng start` (creates `wlanXmon`). `0` = plain `iw set type monitor`. |
 | `WARDRIVE_KILL_INTERFERING` | `1`     | Run `airmon-ng check kill` first so NetworkManager / wpa_supplicant let go.  |
-| `WARDRIVE_HTTPS`            | `1`     | Serve HTTPS (required for Geolocation on a LAN IP).                          |
+| `WARDRIVE_HTTPS`            | `1`     | Serve HTTPS (required for browser Geolocation on a LAN IP).                  |
 | `WARDRIVE_PORT`             | `8443`  | Port to listen on.                                                           |
+| `WARDRIVE_GPS_DEVICE`       | unset   | NMEA serial device (e.g. `/dev/ttyS0` on CM4, `/dev/ttyAMA0` on CM5).        |
+| `WARDRIVE_GPS_BAUD`         | `9600`  | Serial baud rate for the GPS UART.                                           |
+| `WARDRIVE_RTC_SYNC`         | `0`     | `1` to `hwclock -s` from `/dev/rtc0` at startup (AIO v2 PCF85063A).          |
+| `WARDRIVE_SDR_ENABLED`      | `0`     | `1` to run the RTL-SDR `rtl_power` sweep loop.                               |
+| `WARDRIVE_SDR_BANDS`        | ISM+ADSB | Comma list of `rtl_power -f` bands (e.g. `"433M:435M,868M:870M"`).         |
+| `WARDRIVE_SDR_INTERVAL`     | `60`    | Seconds between SDR sweep cycles.                                            |
+| `WARDRIVE_SDR_THRESHOLD`    | `-40`   | dBm threshold for "peak" bins.                                               |
+| `WARDRIVE_LORA_DEVICE`      | unset   | Meshtastic serial device (e.g. `/dev/ttyACM0`); enables LoRa fleet beacons.  |
+| `WARDRIVE_CREW_ID`          | random  | Short crew name broadcast in LoRa beacons (auto-generated if absent).        |
+| `WARDRIVE_LORA_INTERVAL`    | `30`    | Seconds between LoRa beacons.                                                |
 | `WARDRIVE_LOG_LEVEL`        | `INFO`  | Python logging level.                                                        |
+
+### AIO v2 peripherals
+
+When the matching env var is set:
+
+- **RTC (PCF85063A)** — system time is pulled from the battery-backed
+  RTC at startup so timestamps stay coherent across cold boots while
+  mobile/offline. Status surfaces as the `RTC` indicator on the LCD.
+- **RTL-SDR (RTL2832U + R860)** — periodic `rtl_power` sweep across the
+  configured bands; each FFT bin above the dBm threshold is counted as
+  an "RF signal" and contributes to the score (so ambient ISM/433/868
+  /915/ADS-B activity makes the car go faster). Spectrum bars render
+  under the car when `SDR` is active.
+- **LoRa via Meshtastic (SX1262)** — broadcasts a small JSON beacon
+  every N seconds on a private Meshtastic app port (`{crew_id, score,
+  mph, lat, lon}`); incoming beacons from other crews running
+  wardrive_crew populate `STATE.fleet` and render as ghost-car
+  silhouettes on the road, sorted by score-distance. Requires the
+  SX1262 to have Meshtastic firmware flashed (a one-time step done with
+  the official Meshtastic CLI).
 
 ## Endpoints
 

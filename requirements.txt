@@ -1,3 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
+pyserial==3.5
+# Optional — only used when WARDRIVE_LORA_DEVICE is set. Pip-installed at
+# build so the import is available; if you don't have a Meshtastic node,
+# the lora_loop is a no-op and never imports it at runtime path.
+meshtastic==2.5.9
