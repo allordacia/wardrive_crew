@@ -157,6 +157,26 @@ class WhitelistBulkIn(BaseModel):
     ssids: list[str] = Field(default_factory=list)
 
 
+class PresetIn(BaseModel):
+    preset: str
+
+
+@app.get("/api/preset")
+def get_preset() -> dict:
+    """Returns the active scene preset id (vehicle + cast). The frontend
+    holds the registry of available presets; the backend just remembers
+    which one was chosen so it survives container restarts."""
+    return {"preset": STATE.get_setting("scene_preset", "classic")}
+
+
+@app.put("/api/preset")
+def set_preset(body: PresetIn) -> dict:
+    if not body.preset or len(body.preset) > 64:
+        raise HTTPException(status_code=400, detail="invalid preset id")
+    STATE.set_setting("scene_preset", body.preset)
+    return {"ok": True, "preset": body.preset}
+
+
 @app.put("/api/whitelist")
 def whitelist_set(body: WhitelistBulkIn) -> dict:
     """Replace the whitelist with the given BSSIDs (and any BSSID matching

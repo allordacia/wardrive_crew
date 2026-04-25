@@ -34,6 +34,10 @@ def _connect() -> sqlite3.Connection:
             name TEXT PRIMARY KEY,
             value INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         INSERT OR IGNORE INTO counters(name, value) VALUES ('packets', 0);
         INSERT OR IGNORE INTO counters(name, value) VALUES ('pcap_bytes', 0);
         """
@@ -100,6 +104,20 @@ class State:
         )
         self.db.commit()
         return cur.rowcount
+
+    # ---- generic key/value settings (used by the scene preset picker) ----
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        cur = self.db.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.db.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        self.db.commit()
 
     def total_packets(self) -> int:
         cur = self.db.execute("SELECT value FROM counters WHERE name='packets'")

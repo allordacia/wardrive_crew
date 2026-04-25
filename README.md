@@ -77,8 +77,29 @@ score (e.g. your own home AP).
 - `POST /api/gps`       — `{lat, lon, speed_mps?, accuracy_m?}`.
 - `POST /api/whitelist` — `{bssid|ssid, whitelisted}` toggle.
 - `PUT  /api/whitelist` — `{bssids:[…], ssids:[…]}` replace the whitelist.
+- `GET  /api/preset` / `PUT /api/preset` — read/set the active scene preset.
 - `POST /api/monitor/on` / `/api/monitor/off` — toggle monitor + pcap.
 - `WS   /ws`            — live state stream for the HUD.
+
+## Adding new vehicles or animals
+
+The scene is driven by three registries in `app/static/game.js`:
+
+```js
+ANIMALS.<id> = { label, draw(x, y, frame) }
+VEHICLES.<id> = { label, width, height, seats, seatPositions(x, y), draw(x, y, phase) }
+PRESETS.<id>  = { label, vehicle: <vehicle id>, cast: [<animal id>, …] }
+```
+
+Drop a new entry into any of those tables and reload the page — the
+preset picker in the SETTINGS modal will pick it up automatically.
+Drawing primitives are `seg(active, fn)` for filled segments and
+`segStroke(active, weight, fn)` for outlines; both follow the LCD
+"ghost when off, ink when on" convention so the new piece blends in
+visually.
+
+The active preset is stored server-side in SQLite (`settings` table)
+and survives container restarts.
 
 ## Data layout
 
