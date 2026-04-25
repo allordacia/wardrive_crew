@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openssl \
         ca-certificates \
         procps \
+        util-linux \
+        rtl-sdr \
+        librtlsdr0 \
     && rm -rf /var/lib/apt/lists/*
 
 # dumpcap needs to run as non-root in the wireshark group normally; we run

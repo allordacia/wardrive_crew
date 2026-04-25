@@ -93,7 +93,35 @@ score (e.g. your own home AP).
 | `WARDRIVE_PORT`             | `8443`  | Port to listen on.                                                           |
 | `WARDRIVE_GPS_DEVICE`       | unset   | NMEA serial device (e.g. `/dev/ttyS0` on CM4, `/dev/ttyAMA0` on CM5).        |
 | `WARDRIVE_GPS_BAUD`         | `9600`  | Serial baud rate for the GPS UART.                                           |
+| `WARDRIVE_RTC_SYNC`         | `0`     | `1` to `hwclock -s` from `/dev/rtc0` at startup (AIO v2 PCF85063A).          |
+| `WARDRIVE_SDR_ENABLED`      | `0`     | `1` to run the RTL-SDR `rtl_power` sweep loop.                               |
+| `WARDRIVE_SDR_BANDS`        | ISM+ADSB | Comma list of `rtl_power -f` bands (e.g. `"433M:435M,868M:870M"`).         |
+| `WARDRIVE_SDR_INTERVAL`     | `60`    | Seconds between SDR sweep cycles.                                            |
+| `WARDRIVE_SDR_THRESHOLD`    | `-40`   | dBm threshold for "peak" bins.                                               |
+| `WARDRIVE_LORA_DEVICE`      | unset   | Meshtastic serial device (e.g. `/dev/ttyACM0`); enables LoRa fleet beacons.  |
+| `WARDRIVE_CREW_ID`          | random  | Short crew name broadcast in LoRa beacons (auto-generated if absent).        |
+| `WARDRIVE_LORA_INTERVAL`    | `30`    | Seconds between LoRa beacons.                                                |
 | `WARDRIVE_LOG_LEVEL`        | `INFO`  | Python logging level.                                                        |
+
+### AIO v2 peripherals
+
+When the matching env var is set:
+
+- **RTC (PCF85063A)** — system time is pulled from the battery-backed
+  RTC at startup so timestamps stay coherent across cold boots while
+  mobile/offline. Status surfaces as the `RTC` indicator on the LCD.
+- **RTL-SDR (RTL2832U + R860)** — periodic `rtl_power` sweep across the
+  configured bands; each FFT bin above the dBm threshold is counted as
+  an "RF signal" and contributes to the score (so ambient ISM/433/868
+  /915/ADS-B activity makes the car go faster). Spectrum bars render
+  under the car when `SDR` is active.
+- **LoRa via Meshtastic (SX1262)** — broadcasts a small JSON beacon
+  every N seconds on a private Meshtastic app port (`{crew_id, score,
+  mph, lat, lon}`); incoming beacons from other crews running
+  wardrive_crew populate `STATE.fleet` and render as ghost-car
+  silhouettes on the road, sorted by score-distance. Requires the
+  SX1262 to have Meshtastic firmware flashed (a one-time step done with
+  the official Meshtastic CLI).
 
 ## Endpoints
 

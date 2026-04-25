@@ -26,9 +26,16 @@
     speed: 0,
     networks: 0,
     packets: 0,
+    rf_signals: 0,
+    rf_window: 0,
     monitor_on: false,
     pcap_on: false,
     gps_on: false,
+    rtc_synced: false,
+    sdr_active: false,
+    lora_active: false,
+    crew_id: "",
+    fleet: [],         // [{crew_id, score, mph, lat, lon, age_s}, …]
     status: "connecting…",
   };
 
@@ -551,6 +558,11 @@
     const veh = VEHICLES[preset.vehicle] || VEHICLES.convertible;
     const carX = Math.floor((W - veh.width) / 2);
     const carY = 170;
+
+    // Ghost cars for LoRa fleet members. They float behind/ahead of the
+    // player based on relative score: higher score → ahead (further right).
+    drawFleetGhosts(carX, carY, veh, phase);
+
     veh.draw(carX, carY, phase);
     const seats = veh.seatPositions(carX, carY);
     preset.cast.forEach((id, i) => {
@@ -558,10 +570,76 @@
       if (!seat) return;
       const animal = ANIMALS[id];
       if (!animal) return;
-      // alternate frame phase between adjacent seats so animations stagger
       const f = (i & 1) ? ((phase >> 1) & 1) : (phase & 1);
       animal.draw(seat.x, seat.y, f);
     });
+
+    // SDR RF activity: small spectrum bars under the car. Bars light up
+    // proportionally to rf_window (decayed per backend).
+    if (sim.sdr_active) drawRfBars(carX, carY + veh.height + 28, phase);
+  }
+
+  // ============================================================
+  //  Fleet ghost cars (LoRa beacons)
+  // ============================================================
+  function drawFleetGhosts(carX, carY, veh, phase) {
+    if (!sim.fleet || sim.fleet.length === 0) return;
+    // Sort by score, render up to 3 closest neighbours
+    const myScore = sim.networks;
+    const others = sim.fleet
+      .slice()
+      .sort((a, b) =>
+        Math.abs((a.score || 0) - myScore) - Math.abs((b.score || 0) - myScore)
+      )
+      .slice(0, 3);
+
+    others.forEach((m, idx) => {
+      // Position: behind us if score < ours, ahead if score > ours.
+      const delta = (m.score || 0) - myScore;
+      const xOffset = Math.max(-200, Math.min(200, delta * 4));
+      const gx = carX + xOffset + (idx % 2 === 0 ? -90 : 90);
+      const gy = carY + 8 + idx * 4;
+      // Tiny 2-frame chassis silhouette (stripped-down convertible).
+      const f = (phase + idx) & 1;
+      // body
+      seg(true, c => { rrect(c, gx, gy + 30, 60, 25, 3); });
+      seg(true, c => {
+        c.moveTo(gx + 8, gy + 30);
+        c.lineTo(gx + 18, gy + 18);
+        c.lineTo(gx + 50, gy + 18);
+        c.lineTo(gx + 56, gy + 30);
+      });
+      // wheels (rough)
+      seg(true, c => { c.arc(gx + 12, gy + 56, 6, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(gx + 48, gy + 56, 6, 0, Math.PI * 2); });
+      // crew tag — just a few dots indicating they're real
+      seg(f === 0, c => { c.arc(gx + 30, gy + 14, 1.5, 0, Math.PI * 2); });
+      // small label
+      ctx.fillStyle = INK;
+      ctx.font = "bold 9px Courier New, monospace";
+      ctx.textBaseline = "top";
+      ctx.fillText(m.crew_id || "", gx, gy + 60);
+    });
+  }
+
+  // ============================================================
+  //  SDR spectrum bars
+  // ============================================================
+  function drawRfBars(x, y, phase) {
+    const bars = 12;
+    const barW = 6;
+    const gap = 3;
+    // intensity scales 0..1 with rf_window
+    const intensity = Math.min(1.0, (sim.rf_window || 0) / 50);
+    for (let i = 0; i < bars; i++) {
+      // pseudo-random heights from phase + i so the bars dance
+      const seed = ((i * 31) ^ phase) & 0x7;
+      const hMax = 4 + seed;
+      const lit = Math.random() < intensity * 0.6 || ((phase + i) & 3) === 0;
+      seg(lit, c => {
+        c.rect(x + i * (barW + gap), y - hMax, barW, hMax);
+      });
+    }
   }
 
   // ============================================================
@@ -617,9 +695,16 @@
         sim.speed = s.speed_mph || 0;
         sim.networks = s.networks_total || 0;
         sim.packets = s.packets_total || 0;
+        sim.rf_signals = s.rf_signals_total || 0;
+        sim.rf_window = s.rf_window || 0;
         sim.monitor_on = !!s.monitor_on;
         sim.pcap_on = !!s.pcap_on;
         sim.gps_on = !!(s.gps && s.gps.have_fix);
+        sim.rtc_synced = !!s.rtc_synced;
+        sim.sdr_active = !!s.sdr_active;
+        sim.lora_active = !!s.lora_active;
+        sim.crew_id = s.crew_id || "";
+        sim.fleet = Array.isArray(s.fleet) ? s.fleet : [];
         sim.status = s.status || "";
         updateReadouts();
       } catch (e) { /* ignore */ }
@@ -641,6 +726,10 @@
     pcap: document.querySelector('[data-on="pcap"]'),
     mon: document.querySelector('[data-on="mon"]'),
     gps: document.querySelector('[data-on="gps"]'),
+    rtc: document.querySelector('[data-on="rtc"]'),
+    sdr: document.querySelector('[data-on="sdr"]'),
+    lora: document.querySelector('[data-on="lora"]'),
+    fleet: document.querySelector('[data-on="fleet"]'),
     lo: document.querySelector('[data-on="lo"]'),
     mid: document.querySelector('[data-on="mid"]'),
     hi: document.querySelector('[data-on="hi"]'),
@@ -655,6 +744,13 @@
     ovr.pcap.dataset.active = sim.pcap_on ? "1" : "0";
     ovr.mon.dataset.active = sim.monitor_on ? "1" : "0";
     ovr.gps.dataset.active = sim.gps_on ? "1" : "0";
+    ovr.rtc.dataset.active = sim.rtc_synced ? "1" : "0";
+    ovr.sdr.dataset.active = sim.sdr_active ? "1" : "0";
+    ovr.lora.dataset.active = sim.lora_active ? "1" : "0";
+    if (ovr.fleet) {
+      ovr.fleet.textContent = `FLEET ${sim.fleet.length}`;
+      ovr.fleet.dataset.active = sim.fleet.length > 0 ? "1" : "0";
+    }
     ovr.lo.dataset.active = sim.speed > 5 ? "1" : "0";
     ovr.mid.dataset.active = sim.speed > 40 ? "1" : "0";
     ovr.hi.dataset.active = sim.speed > 100 ? "1" : "0";

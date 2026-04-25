@@ -69,12 +69,20 @@ class State:
     monitor_on: bool = False
     pcap_on: bool = False
     last_scan_ts: float = 0.0
-    new_bssids_window: int = 0  # decays over time
-    packets_window: int = 0
+    new_bssids_window: float = 0.0    # decays over time
+    packets_window: float = 0.0
+    rf_signals_window: float = 0.0    # decays; SDR sweep peaks
+    rf_signals_total: int = 0
     gps: GpsFix = field(default_factory=GpsFix)
     db: sqlite3.Connection = field(default_factory=_connect)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     status_msg: str = "idle"
+    # Optional AIO v2 peripherals
+    rtc_synced: bool = False
+    sdr_active: bool = False
+    lora_active: bool = False
+    crew_id: str = ""
+    fleet: dict = field(default_factory=dict)   # crew_id -> last-beacon dict
 
     def total_networks(self) -> int:
         cur = self.db.execute(
@@ -191,23 +199,47 @@ class State:
             )
         self.db.commit()
 
+    def add_rf_signals(self, n: int) -> None:
+        if n <= 0:
+            return
+        self.rf_signals_total += n
+        self.rf_signals_window += n
+
     def decay_window(self, dt: float) -> None:
         # Exponential decay so the speedometer eases back down when
         # captures stop coming in.
         decay = math.exp(-dt / 6.0)
         self.new_bssids_window *= decay
         self.packets_window *= decay
+        # SDR sweeps run on a slower cadence; longer half-life so they
+        # don't drop off the score before the next sweep arrives.
+        self.rf_signals_window *= math.exp(-dt / 30.0)
 
     def speed_mph(self) -> float:
         # Composite "score speed": new networks weigh heavier than packets,
-        # GPS movement adds a real-world boost.
+        # GPS movement adds a real-world boost, and ambient RF from the SDR
+        # contributes a small steady push.
         bssid_term = self.new_bssids_window * 8.0
         pkt_term = min(self.packets_window * 0.05, 40.0)
+        rf_term = min(self.rf_signals_window * 0.1, 20.0)
         gps_term = self.gps.speed_mps * 2.237 if self.gps.have_fix else 0.0
         # Idle speed so the car always rolls a bit.
         base = 4.0
-        total = base + bssid_term + pkt_term + gps_term
+        total = base + bssid_term + pkt_term + rf_term + gps_term
         return float(min(total, 220.0))
+
+    # ---- LoRa fleet helpers ----
+    def update_fleet_member(self, crew_id: str, beacon: dict) -> None:
+        beacon = dict(beacon)
+        beacon["last_seen"] = time.time()
+        self.fleet[crew_id] = beacon
+
+    def prune_fleet(self, timeout_s: float) -> None:
+        now = time.time()
+        stale = [cid for cid, b in self.fleet.items()
+                 if now - b.get("last_seen", 0) > timeout_s]
+        for cid in stale:
+            self.fleet.pop(cid, None)
 
 
 STATE = State()
