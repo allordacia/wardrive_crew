@@ -1,0 +1,26 @@
+# wardrive_crew — runs the war-driving game on the host's wireless interface.
+#
+# Wireless scanning requires direct access to the host's wifi adapter. We use
+# host networking + NET_ADMIN/NET_RAW caps. If you need monitor mode, the
+# adapter and its driver must support it (e.g. Atheros AR9271, Ralink RT3070,
+# Realtek RTL8812AU, Intel AX2xx with the right kmod, etc.).
+#
+# Override the interface with WARDRIVE_IFACE if it isn't wlan0.
+
+services:
+  wardrive:
+    build: .
+    image: wardrive_crew:latest
+    container_name: wardrive_crew
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      WARDRIVE_IFACE: ${WARDRIVE_IFACE:-wlan0}
+      WARDRIVE_SCAN_INTERVAL: ${WARDRIVE_SCAN_INTERVAL:-8}
+      # Set to 1 to flip into monitor mode + start pcap capture on boot.
+      WARDRIVE_AUTO_MONITOR: ${WARDRIVE_AUTO_MONITOR:-0}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
