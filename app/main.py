@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import scanner
+from . import gps_serial
 from .state import STATE
 
 
@@ -27,13 +28,29 @@ log = logging.getLogger("wardrive")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _autodetect_preset() -> None:
+    """First-boot heuristic: if the AIO v2 hardware looks present and no
+    preset has been chosen yet, pick the safari preset (themed for off-grid)
+    so users running on a uConsole get a uConsole-flavoured scene by default.
+    """
+    if STATE.get_setting("scene_preset") is not None:
+        return
+    gps_dev = os.environ.get("WARDRIVE_GPS_DEVICE", "").strip()
+    has_aio_gps = bool(gps_dev) and Path(gps_dev).exists()
+    if has_aio_gps:
+        STATE.set_setting("scene_preset", "safari")
+        log.info("auto-selected 'safari' preset (AIO v2 GPS detected at %s)", gps_dev)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     STATE.iface = os.environ.get("WARDRIVE_IFACE", "wlan0")
     log.info("starting wardrive_crew on iface=%s", STATE.iface)
+    _autodetect_preset()
     tasks = [
         asyncio.create_task(scanner.scan_loop(), name="scan_loop"),
         asyncio.create_task(scanner.decay_loop(), name="decay_loop"),
+        asyncio.create_task(gps_serial.gps_serial_loop(), name="gps_serial"),
     ]
     if os.environ.get("WARDRIVE_AUTO_MONITOR", "0") == "1":
         try:
