@@ -180,53 +180,61 @@
   }
 
   // ============================================================
-  //  CAR — boxy hatchback, 4 critters hanging out
+  //  CAR — convertible, 4 critters sitting up in plain sight
   // ============================================================
   const CAR_X = 180;
   const CAR_Y = 170;
   const CAR_W = 280;
   const CAR_H = 90;
+  // y=200 is the door-top line; animals sit on the seats above it
+  const DOOR_Y = CAR_Y + 30;
 
   function drawCar(phase) {
-    // body — always on
+    // hood (front, right)
     seg(true, c => {
-      // lower body
-      rrect(c, CAR_X, CAR_Y + 30, CAR_W, CAR_H - 30, 6);
+      rrect(c, CAR_X + CAR_W - 60, DOOR_Y + 10, 60, CAR_H - 40, 4);
     });
-    // upper greenhouse / roof
+    // trunk (back, left)
     seg(true, c => {
-      c.moveTo(CAR_X + 30, CAR_Y + 30);
-      c.lineTo(CAR_X + 60, CAR_Y);
-      c.lineTo(CAR_X + CAR_W - 60, CAR_Y);
-      c.lineTo(CAR_X + CAR_W - 20, CAR_Y + 30);
-      c.lineTo(CAR_X + 30, CAR_Y + 30);
+      rrect(c, CAR_X, DOOR_Y + 10, 50, CAR_H - 40, 4);
     });
-    // window cutouts (we draw them by repainting LCD background color via composite)
-    // Simpler: draw the windows as ghost rectangles to suggest glass.
-    drawWindow(CAR_X + 65, CAR_Y + 6, 70, 22);   // driver
-    drawWindow(CAR_X + 145, CAR_Y + 6, 70, 22);  // rear
-
-    // door seams (always on, thin)
+    // door / cabin block (between trunk and hood) — open-top
+    seg(true, c => {
+      rrect(c, CAR_X + 45, DOOR_Y, CAR_W - 105, CAR_H - 30, 4);
+    });
+    // slanted windshield (front)
+    segStroke(true, 3, c => {
+      c.moveTo(CAR_X + CAR_W - 60, DOOR_Y);
+      c.lineTo(CAR_X + CAR_W - 78, DOOR_Y - 26);
+    });
+    // rear roll bar (back of cabin)
+    segStroke(true, 3, c => {
+      c.moveTo(CAR_X + 45, DOOR_Y);
+      c.lineTo(CAR_X + 45, DOOR_Y - 18);
+    });
+    // door seam
     segStroke(true, 2, c => {
-      c.moveTo(CAR_X + 140, CAR_Y + 32);
-      c.lineTo(CAR_X + 140, CAR_Y + CAR_H);
+      c.moveTo(CAR_X + CAR_W / 2 - 5, DOOR_Y + 4);
+      c.lineTo(CAR_X + CAR_W / 2 - 5, CAR_Y + CAR_H);
     });
-
-    // headlight + taillight
-    seg(true, c => { c.arc(CAR_X + CAR_W - 8, CAR_Y + 50, 5, 0, Math.PI * 2); });
-    seg(((phase >> 1) & 1) === 1, c => {  // brake/signal blink
-      c.arc(CAR_X + 8, CAR_Y + 50, 5, 0, Math.PI * 2);
+    // door handles
+    seg(true, c => { c.arc(CAR_X + 90, DOOR_Y + 22, 2, 0, Math.PI * 2); });
+    seg(true, c => { c.arc(CAR_X + CAR_W - 95, DOOR_Y + 22, 2, 0, Math.PI * 2); });
+    // headlight
+    seg(true, c => { c.arc(CAR_X + CAR_W - 6, DOOR_Y + 28, 5, 0, Math.PI * 2); });
+    // taillight blink
+    seg(((phase >> 1) & 1) === 1, c => {
+      c.arc(CAR_X + 6, DOOR_Y + 28, 5, 0, Math.PI * 2);
+    });
+    // steering wheel in front of driver (just a hint)
+    segStroke(true, 2, c => {
+      c.arc(CAR_X + CAR_W - 75, DOOR_Y + 8, 6, -0.4, Math.PI + 0.4);
     });
 
     drawWheels(phase);
     drawAnimals(phase);
     drawAntenna(phase);
     drawExhaust(phase);
-  }
-
-  function drawWindow(x, y, w, h) {
-    // faint window outline so glass is suggested
-    segStroke(true, 2, c => { c.rect(x, y, w, h); });
   }
 
   function drawWheels(phase) {
@@ -256,110 +264,169 @@
   }
 
   function drawAnimals(phase) {
-    const f = phase & 1;          // 2-frame body animation
+    const f = phase & 1;          // 2-frame animation
     const f2 = (phase >> 1) & 1;  // slower 2-frame for arms
 
-    // DRIVER DOG — head out front window
-    drawDog(CAR_X + 92, CAR_Y + 10, f);
+    // Side-view seat positions (right = front, left = back).
+    // Sit each animal so its feet are around the door line (DOOR_Y).
+    const seatY = CAR_Y - 5;
 
-    // BACKSEAT CAT — rear window
-    drawCat(CAR_X + 175, CAR_Y + 10, f);
-
-    // SUNROOF PARROT — pops out of top
-    drawParrot(CAR_X + 130, CAR_Y - 6, f2);
-
-    // HATCHBACK RACCOON — hanging out the back
-    drawRaccoon(CAR_X - 8, CAR_Y + 38, f2);
+    // back-left: RACCOON (waving)
+    drawRaccoon(CAR_X + 75, seatY, f2);
+    // back-right: PARROT
+    drawParrot(CAR_X + 130, seatY, f);
+    // front-left (passenger): CAT
+    drawCat(CAR_X + 185, seatY, f);
+    // front-right (driver): DOG
+    drawDog(CAR_X + 230, seatY, f);
   }
 
+  // All animals share a torso + head + ears/feathers idiom. Coords are
+  // anchored at (x, y) = top of the head.
+
   function drawDog(x, y, f) {
+    // torso (visible above door)
+    seg(true, c => { c.ellipse(x, y + 28, 14, 18, 0, 0, Math.PI * 2); });
     // head
-    seg(true, c => {
-      c.ellipse(x, y, 14, 12, 0, 0, Math.PI * 2);
-    });
+    seg(true, c => { c.ellipse(x + 2, y + 8, 13, 11, 0, 0, Math.PI * 2); });
     // snout
-    seg(true, c => { c.ellipse(x + 12, y + 4, 7, 5, 0, 0, Math.PI * 2); });
-    // ear flapping — frame 0 up, frame 1 back
+    seg(true, c => { c.ellipse(x + 13, y + 12, 7, 5, 0, 0, Math.PI * 2); });
+    // tongue lolling (always)
+    seg(true, c => { c.ellipse(x + 16, y + 16, 3, 3, 0, 0, Math.PI * 2); });
+    // ear: 2 frames — perked up vs flapping back from the wind
     seg(f === 0, c => {
-      c.moveTo(x - 6, y - 8); c.lineTo(x - 14, y - 22); c.lineTo(x - 2, y - 14);
+      c.moveTo(x - 4, y + 4); c.lineTo(x - 6, y - 8); c.lineTo(x + 2, y + 2);
     });
     seg(f === 1, c => {
-      c.moveTo(x - 6, y - 8); c.lineTo(x - 22, y - 6); c.lineTo(x - 4, y - 2);
+      c.moveTo(x - 4, y + 4); c.lineTo(x - 18, y + 2); c.lineTo(x - 2, y + 8);
     });
-    // tongue out always
-    seg(true, c => { c.ellipse(x + 14, y + 8, 4, 3, 0, 0, Math.PI * 2); });
-    // eye dot
-    seg(true, c => { c.arc(x + 4, y - 2, 1.6, 0, Math.PI * 2); });
+    // collar
+    segStroke(true, 2, c => {
+      c.moveTo(x - 10, y + 18); c.lineTo(x + 10, y + 18);
+    });
+    // collar tag
+    seg(true, c => { c.arc(x, y + 22, 2, 0, Math.PI * 2); });
+    // paws on the wheel (always, both frames)
+    seg(true, c => { c.arc(x + 11, y + 26, 3, 0, Math.PI * 2); });
+    seg(true, c => { c.arc(x + 14, y + 22, 3, 0, Math.PI * 2); });
+    // eye
+    seg(true, c => { c.arc(x + 5, y + 6, 1.6, 0, Math.PI * 2); });
   }
 
   function drawCat(x, y, f) {
+    // torso
+    seg(true, c => { c.ellipse(x, y + 28, 12, 18, 0, 0, Math.PI * 2); });
     // head
-    seg(true, c => { c.ellipse(x, y + 2, 13, 11, 0, 0, Math.PI * 2); });
-    // ears (triangles)
+    seg(true, c => { c.ellipse(x, y + 8, 12, 11, 0, 0, Math.PI * 2); });
+    // ears (triangles, always)
     seg(true, c => {
-      c.moveTo(x - 10, y - 6); c.lineTo(x - 5, y - 16); c.lineTo(x - 2, y - 6);
+      c.moveTo(x - 10, y + 2); c.lineTo(x - 6, y - 8); c.lineTo(x - 2, y + 2);
     });
     seg(true, c => {
-      c.moveTo(x + 2, y - 6); c.lineTo(x + 5, y - 16); c.lineTo(x + 10, y - 6);
+      c.moveTo(x + 2, y + 2); c.lineTo(x + 6, y - 8); c.lineTo(x + 10, y + 2);
     });
     // whiskers — toggle direction
-    segStroke(f === 0, 1.5, c => { c.moveTo(x + 8, y + 2); c.lineTo(x + 22, y); });
-    segStroke(f === 0, 1.5, c => { c.moveTo(x + 8, y + 5); c.lineTo(x + 22, y + 6); });
-    segStroke(f === 1, 1.5, c => { c.moveTo(x + 8, y + 2); c.lineTo(x + 22, y + 6); });
-    segStroke(f === 1, 1.5, c => { c.moveTo(x + 8, y + 5); c.lineTo(x + 22, y); });
+    segStroke(f === 0, 1.2, c => { c.moveTo(x + 7, y + 9); c.lineTo(x + 18, y + 6); });
+    segStroke(f === 0, 1.2, c => { c.moveTo(x + 7, y + 11); c.lineTo(x + 18, y + 13); });
+    segStroke(f === 1, 1.2, c => { c.moveTo(x + 7, y + 9); c.lineTo(x + 18, y + 13); });
+    segStroke(f === 1, 1.2, c => { c.moveTo(x + 7, y + 11); c.lineTo(x + 18, y + 6); });
+    // tail flicking up over the seat — 2 frames
+    segStroke(f === 0, 4, c => {
+      c.moveTo(x - 6, y + 30); c.quadraticCurveTo(x - 24, y + 14, x - 16, y - 4);
+    });
+    segStroke(f === 1, 4, c => {
+      c.moveTo(x - 6, y + 30); c.quadraticCurveTo(x - 24, y + 22, x - 22, y + 4);
+    });
     // eyes
-    seg(true, c => { c.arc(x - 4, y, 1.6, 0, Math.PI * 2); c.arc(x + 4, y, 1.6, 0, Math.PI * 2); });
+    seg(true, c => { c.arc(x - 4, y + 8, 1.6, 0, Math.PI * 2); c.arc(x + 4, y + 8, 1.6, 0, Math.PI * 2); });
+    // nose
+    seg(true, c => { c.arc(x, y + 12, 1.4, 0, Math.PI * 2); });
   }
 
   function drawParrot(x, y, f) {
-    // body popping out of sunroof
-    seg(true, c => { c.ellipse(x, y - 4, 9, 12, 0, 0, Math.PI * 2); });
-    // beak
+    // torso
+    seg(true, c => { c.ellipse(x, y + 22, 11, 18, 0, 0, Math.PI * 2); });
+    // head
+    seg(true, c => { c.ellipse(x, y + 6, 9, 9, 0, 0, Math.PI * 2); });
+    // beak hooking forward (right)
     seg(true, c => {
-      c.moveTo(x + 7, y - 10); c.lineTo(x + 16, y - 6); c.lineTo(x + 7, y - 4);
+      c.moveTo(x + 7, y + 4); c.lineTo(x + 16, y + 8); c.lineTo(x + 7, y + 10);
     });
     // crest feathers — 2 frames
     seg(f === 0, c => {
-      c.moveTo(x - 2, y - 14); c.lineTo(x + 2, y - 24); c.lineTo(x + 6, y - 14);
+      c.moveTo(x - 3, y - 4); c.lineTo(x + 1, y - 16); c.lineTo(x + 5, y - 4);
     });
     seg(f === 1, c => {
-      c.moveTo(x - 6, y - 12); c.lineTo(x - 4, y - 24); c.lineTo(x + 0, y - 14);
+      c.moveTo(x - 6, y - 4); c.lineTo(x - 4, y - 16); c.lineTo(x + 2, y - 4);
     });
-    // wing flap
-    seg(f === 0, c => { c.ellipse(x - 8, y - 2, 4, 8, -0.4, 0, Math.PI * 2); });
-    seg(f === 1, c => { c.ellipse(x - 6, y - 8, 4, 8, 0.6, 0, Math.PI * 2); });
+    // wing flap — large silhouette over torso
+    seg(f === 0, c => {
+      c.ellipse(x - 6, y + 18, 6, 12, -0.3, 0, Math.PI * 2);
+    });
+    seg(f === 1, c => {
+      c.ellipse(x - 4, y + 8, 6, 14, 0.5, 0, Math.PI * 2);
+    });
     // eye
-    seg(true, c => { c.arc(x + 3, y - 8, 1.4, 0, Math.PI * 2); });
+    seg(true, c => { c.arc(x + 4, y + 4, 1.4, 0, Math.PI * 2); });
+    // foot peeking over door
+    seg(true, c => {
+      c.rect(x - 2, y + 36, 2, 4);
+      c.rect(x + 2, y + 36, 2, 4);
+    });
   }
 
   function drawRaccoon(x, y, f) {
-    // body hanging out the hatch
-    seg(true, c => { c.ellipse(x, y, 12, 9, 0, 0, Math.PI * 2); });
-    // mask stripe
-    seg(true, c => { c.rect(x - 9, y - 3, 18, 4); });
+    // torso
+    seg(true, c => { c.ellipse(x, y + 26, 13, 16, 0, 0, Math.PI * 2); });
+    // head
+    seg(true, c => { c.ellipse(x, y + 8, 12, 10, 0, 0, Math.PI * 2); });
+    // mask stripe across eyes
+    seg(true, c => { c.rect(x - 9, y + 5, 18, 4); });
     // ears
-    seg(true, c => { c.arc(x - 7, y - 9, 3, 0, Math.PI * 2); });
-    seg(true, c => { c.arc(x + 7, y - 9, 3, 0, Math.PI * 2); });
-    // arm waving — 2 frames
-    segStroke(f === 0, 3, c => { c.moveTo(x - 10, y + 4); c.lineTo(x - 22, y - 4); });
-    segStroke(f === 1, 3, c => { c.moveTo(x - 10, y + 4); c.lineTo(x - 22, y + 12); });
-    // striped tail
-    segStroke(true, 4, c => { c.moveTo(x - 12, y + 6); c.lineTo(x - 26, y + 14); });
-    // eyes
-    seg(true, c => { c.arc(x - 3, y - 1, 1.4, 0, Math.PI * 2); c.arc(x + 3, y - 1, 1.4, 0, Math.PI * 2); });
+    seg(true, c => { c.arc(x - 7, y - 1, 3, 0, Math.PI * 2); });
+    seg(true, c => { c.arc(x + 7, y - 1, 3, 0, Math.PI * 2); });
+    // arm waving high — 2 frames (above the head, very visible)
+    segStroke(f === 0, 4, c => {
+      c.moveTo(x + 4, y + 22); c.lineTo(x + 16, y - 10);
+    });
+    segStroke(f === 1, 4, c => {
+      c.moveTo(x + 4, y + 22); c.lineTo(x + 22, y + 4);
+    });
+    // paw at tip of arm
+    seg(f === 0, c => { c.arc(x + 16, y - 10, 3, 0, Math.PI * 2); });
+    seg(f === 1, c => { c.arc(x + 22, y + 4, 3, 0, Math.PI * 2); });
+    // striped tail held aloft — 2 frames
+    segStroke(f === 0, 5, c => {
+      c.moveTo(x - 8, y + 30); c.quadraticCurveTo(x - 26, y + 18, x - 22, y + 0);
+    });
+    segStroke(f === 1, 5, c => {
+      c.moveTo(x - 8, y + 30); c.quadraticCurveTo(x - 30, y + 24, x - 28, y + 8);
+    });
+    // tail rings (2 short cross-strokes for a striped look)
+    segStroke(true, 2, c => {
+      c.moveTo(x - 18, y + 18); c.lineTo(x - 14, y + 22);
+    });
+    segStroke(true, 2, c => {
+      c.moveTo(x - 24, y + 10); c.lineTo(x - 20, y + 14);
+    });
+    // eyes (peeking through the mask)
+    seg(true, c => { c.arc(x - 4, y + 7, 1.4, 0, Math.PI * 2); c.arc(x + 4, y + 7, 1.4, 0, Math.PI * 2); });
+    // snout
+    seg(true, c => { c.ellipse(x, y + 12, 4, 3, 0, 0, Math.PI * 2); });
   }
 
   function drawAntenna(phase) {
-    // wifi antenna on roof — 3 wave arcs, lit progressively with phase
-    const ax = CAR_X + CAR_W - 70;
-    const ay = CAR_Y - 4;
-    segStroke(true, 2, c => { c.moveTo(ax, ay); c.lineTo(ax, ay - 18); });
-    seg(true, c => { c.arc(ax, ay - 18, 2, 0, Math.PI * 2); });
+    // wifi antenna on the trunk — 3 wave arcs, lit progressively with phase.
+    // (No roof on the convertible, so it's mounted at the back.)
+    const ax = CAR_X + 25;
+    const ay = DOOR_Y + 10;          // top of the trunk
+    segStroke(true, 2, c => { c.moveTo(ax, ay); c.lineTo(ax, ay - 30); });
+    seg(true, c => { c.arc(ax, ay - 30, 2, 0, Math.PI * 2); });
     for (let i = 0; i < 3; i++) {
       const on = ((phase + i) % 3) !== 0;
       const r = 6 + i * 6;
       segStroke(on, 2, c => {
-        c.arc(ax + 6, ay - 18, r, -Math.PI / 2.2, Math.PI / 2.2);
+        c.arc(ax + 6, ay - 30, r, -Math.PI / 2.2, Math.PI / 2.2);
       });
     }
   }
