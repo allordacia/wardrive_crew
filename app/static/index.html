@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>WARDRIVE CREW</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="bezel">
+    <div id="brand">
+      <span class="brand-mark">WARDRIVE CREW</span>
+      <span class="brand-sub">LCD-77 / Game &amp; Sniff</span>
+    </div>
+
+    <div id="lcd">
+      <canvas id="screen" width="640" height="360" aria-label="LCD screen"></canvas>
+      <div id="lcd-overlay">
+        <div class="ovr-row top">
+          <span data-on="net">NET</span>
+          <span data-on="pcap">PCAP</span>
+          <span data-on="mon">MON</span>
+          <span data-on="gps">GPS</span>
+        </div>
+        <div class="ovr-row bottom">
+          <span data-on="lo">LO</span>
+          <span data-on="mid">MID</span>
+          <span data-on="hi">HI</span>
+          <span data-on="warn">!!</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="readouts">
+      <div class="readout">
+        <div class="label">NETWORKS</div>
+        <div class="seg" id="seg-networks">000000</div>
+      </div>
+      <div class="readout">
+        <div class="label">PACKETS</div>
+        <div class="seg" id="seg-packets">00000000</div>
+      </div>
+      <div class="readout">
+        <div class="label">MPH</div>
+        <div class="seg big" id="seg-speed">000</div>
+      </div>
+    </div>
+
+    <div id="controls">
+      <button id="btn-monitor" class="btn">MONITOR: OFF</button>
+      <button id="btn-gps" class="btn">GPS: OFF</button>
+      <span id="status">idle</span>
+    </div>
+  </div>
+  <script src="/static/game.js"></script>
+</body>
+</html>

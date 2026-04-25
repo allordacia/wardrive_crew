@@ -1,1 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
 
+# captured data should never be committed
+data/
+!data/.gitkeep
+*.pcap
+*.pcapng
+*.sqlite
+*.sqlite-*
