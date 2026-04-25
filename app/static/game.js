@@ -180,198 +180,388 @@
   }
 
   // ============================================================
-  //  CAR — boxy hatchback, 4 critters hanging out
+  //  REGISTRIES — Animals, Vehicles, Presets
   // ============================================================
-  const CAR_X = 180;
-  const CAR_Y = 170;
-  const CAR_W = 280;
-  const CAR_H = 90;
+  //
+  // Adding new content is purely additive — no changes to the render
+  // loop. Drop a new entry into one of these tables.
+  //
+  //   ANIMALS.<id> = {
+  //     label,
+  //     draw(x, y, frame)    // (x, y) = top-of-head; frame ∈ {0,1}
+  //   }
+  //
+  //   VEHICLES.<id> = {
+  //     label,
+  //     width, height,         // hit-box for centering on the canvas
+  //     seats,                 // max animals this vehicle can hold
+  //     seatPositions(carX, carY) -> [{x, y}, …]
+  //     draw(carX, carY, phase)
+  //   }
+  //
+  //   PRESETS.<id> = {
+  //     label,
+  //     vehicle: <vehicle id>,
+  //     cast: [<animal id>, …]   // length ≤ vehicle.seats
+  //   }
+  //
+  // Inside draw fns, use the closure-scoped seg() / segStroke() / rrect()
+  // helpers — same primitives the rest of the scene uses.
 
-  function drawCar(phase) {
-    // body — always on
-    seg(true, c => {
-      // lower body
-      rrect(c, CAR_X, CAR_Y + 30, CAR_W, CAR_H - 30, 6);
-    });
-    // upper greenhouse / roof
-    seg(true, c => {
-      c.moveTo(CAR_X + 30, CAR_Y + 30);
-      c.lineTo(CAR_X + 60, CAR_Y);
-      c.lineTo(CAR_X + CAR_W - 60, CAR_Y);
-      c.lineTo(CAR_X + CAR_W - 20, CAR_Y + 30);
-      c.lineTo(CAR_X + 30, CAR_Y + 30);
-    });
-    // window cutouts (we draw them by repainting LCD background color via composite)
-    // Simpler: draw the windows as ghost rectangles to suggest glass.
-    drawWindow(CAR_X + 65, CAR_Y + 6, 70, 22);   // driver
-    drawWindow(CAR_X + 145, CAR_Y + 6, 70, 22);  // rear
+  const ANIMALS = {};
+  const VEHICLES = {};
+  const PRESETS = {};
 
-    // door seams (always on, thin)
-    segStroke(true, 2, c => {
-      c.moveTo(CAR_X + 140, CAR_Y + 32);
-      c.lineTo(CAR_X + 140, CAR_Y + CAR_H);
-    });
-
-    // headlight + taillight
-    seg(true, c => { c.arc(CAR_X + CAR_W - 8, CAR_Y + 50, 5, 0, Math.PI * 2); });
-    seg(((phase >> 1) & 1) === 1, c => {  // brake/signal blink
-      c.arc(CAR_X + 8, CAR_Y + 50, 5, 0, Math.PI * 2);
-    });
-
-    drawWheels(phase);
-    drawAnimals(phase);
-    drawAntenna(phase);
-    drawExhaust(phase);
-  }
-
-  function drawWindow(x, y, w, h) {
-    // faint window outline so glass is suggested
-    segStroke(true, 2, c => { c.rect(x, y, w, h); });
-  }
-
-  function drawWheels(phase) {
-    // 4 spoke positions toggled by phase % 4
+  // ----- shared wheel renderer (all vehicles use it) ------------------
+  function drawSpokedWheel(wx, wy, radius, phase) {
     const ph = phase % 4;
-    const wheels = [
-      { x: CAR_X + 50,         y: CAR_Y + CAR_H + 4 },
-      { x: CAR_X + CAR_W - 50, y: CAR_Y + CAR_H + 4 },
-    ];
-    wheels.forEach(w => {
-      // tire (always)
-      seg(true, c => { c.arc(w.x, w.y, 22, 0, Math.PI * 2); });
-      // hub fill (lcd bg) — fake by drawing a slightly smaller ghost ring
-      seg(false, c => { c.arc(w.x, w.y, 16, 0, Math.PI * 2); });
-      // spokes — 4 orientations, draw all as ghost, light the one matching phase
-      for (let i = 0; i < 4; i++) {
-        const a = (i / 4) * Math.PI; // 0, 45, 90, 135 deg
-        const on = i === ph;
-        segStroke(on, 4, c => {
-          c.moveTo(w.x - Math.cos(a) * 14, w.y - Math.sin(a) * 14);
-          c.lineTo(w.x + Math.cos(a) * 14, w.y + Math.sin(a) * 14);
-        });
-      }
-      // hub cap dot
-      seg(true, c => { c.arc(w.x, w.y, 3, 0, Math.PI * 2); });
-    });
+    seg(true, c => { c.arc(wx, wy, radius, 0, Math.PI * 2); });
+    seg(false, c => { c.arc(wx, wy, radius - 6, 0, Math.PI * 2); });
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI;
+      const on = i === ph;
+      segStroke(on, 4, c => {
+        c.moveTo(wx - Math.cos(a) * (radius - 8), wy - Math.sin(a) * (radius - 8));
+        c.lineTo(wx + Math.cos(a) * (radius - 8), wy + Math.sin(a) * (radius - 8));
+      });
+    }
+    seg(true, c => { c.arc(wx, wy, 3, 0, Math.PI * 2); });
   }
 
-  function drawAnimals(phase) {
-    const f = phase & 1;          // 2-frame body animation
-    const f2 = (phase >> 1) & 1;  // slower 2-frame for arms
-
-    // DRIVER DOG — head out front window
-    drawDog(CAR_X + 92, CAR_Y + 10, f);
-
-    // BACKSEAT CAT — rear window
-    drawCat(CAR_X + 175, CAR_Y + 10, f);
-
-    // SUNROOF PARROT — pops out of top
-    drawParrot(CAR_X + 130, CAR_Y - 6, f2);
-
-    // HATCHBACK RACCOON — hanging out the back
-    drawRaccoon(CAR_X - 8, CAR_Y + 38, f2);
-  }
-
-  function drawDog(x, y, f) {
-    // head
-    seg(true, c => {
-      c.ellipse(x, y, 14, 12, 0, 0, Math.PI * 2);
-    });
-    // snout
-    seg(true, c => { c.ellipse(x + 12, y + 4, 7, 5, 0, 0, Math.PI * 2); });
-    // ear flapping — frame 0 up, frame 1 back
-    seg(f === 0, c => {
-      c.moveTo(x - 6, y - 8); c.lineTo(x - 14, y - 22); c.lineTo(x - 2, y - 14);
-    });
-    seg(f === 1, c => {
-      c.moveTo(x - 6, y - 8); c.lineTo(x - 22, y - 6); c.lineTo(x - 4, y - 2);
-    });
-    // tongue out always
-    seg(true, c => { c.ellipse(x + 14, y + 8, 4, 3, 0, 0, Math.PI * 2); });
-    // eye dot
-    seg(true, c => { c.arc(x + 4, y - 2, 1.6, 0, Math.PI * 2); });
-  }
-
-  function drawCat(x, y, f) {
-    // head
-    seg(true, c => { c.ellipse(x, y + 2, 13, 11, 0, 0, Math.PI * 2); });
-    // ears (triangles)
-    seg(true, c => {
-      c.moveTo(x - 10, y - 6); c.lineTo(x - 5, y - 16); c.lineTo(x - 2, y - 6);
-    });
-    seg(true, c => {
-      c.moveTo(x + 2, y - 6); c.lineTo(x + 5, y - 16); c.lineTo(x + 10, y - 6);
-    });
-    // whiskers — toggle direction
-    segStroke(f === 0, 1.5, c => { c.moveTo(x + 8, y + 2); c.lineTo(x + 22, y); });
-    segStroke(f === 0, 1.5, c => { c.moveTo(x + 8, y + 5); c.lineTo(x + 22, y + 6); });
-    segStroke(f === 1, 1.5, c => { c.moveTo(x + 8, y + 2); c.lineTo(x + 22, y + 6); });
-    segStroke(f === 1, 1.5, c => { c.moveTo(x + 8, y + 5); c.lineTo(x + 22, y); });
-    // eyes
-    seg(true, c => { c.arc(x - 4, y, 1.6, 0, Math.PI * 2); c.arc(x + 4, y, 1.6, 0, Math.PI * 2); });
-  }
-
-  function drawParrot(x, y, f) {
-    // body popping out of sunroof
-    seg(true, c => { c.ellipse(x, y - 4, 9, 12, 0, 0, Math.PI * 2); });
-    // beak
-    seg(true, c => {
-      c.moveTo(x + 7, y - 10); c.lineTo(x + 16, y - 6); c.lineTo(x + 7, y - 4);
-    });
-    // crest feathers — 2 frames
-    seg(f === 0, c => {
-      c.moveTo(x - 2, y - 14); c.lineTo(x + 2, y - 24); c.lineTo(x + 6, y - 14);
-    });
-    seg(f === 1, c => {
-      c.moveTo(x - 6, y - 12); c.lineTo(x - 4, y - 24); c.lineTo(x + 0, y - 14);
-    });
-    // wing flap
-    seg(f === 0, c => { c.ellipse(x - 8, y - 2, 4, 8, -0.4, 0, Math.PI * 2); });
-    seg(f === 1, c => { c.ellipse(x - 6, y - 8, 4, 8, 0.6, 0, Math.PI * 2); });
-    // eye
-    seg(true, c => { c.arc(x + 3, y - 8, 1.4, 0, Math.PI * 2); });
-  }
-
-  function drawRaccoon(x, y, f) {
-    // body hanging out the hatch
-    seg(true, c => { c.ellipse(x, y, 12, 9, 0, 0, Math.PI * 2); });
-    // mask stripe
-    seg(true, c => { c.rect(x - 9, y - 3, 18, 4); });
-    // ears
-    seg(true, c => { c.arc(x - 7, y - 9, 3, 0, Math.PI * 2); });
-    seg(true, c => { c.arc(x + 7, y - 9, 3, 0, Math.PI * 2); });
-    // arm waving — 2 frames
-    segStroke(f === 0, 3, c => { c.moveTo(x - 10, y + 4); c.lineTo(x - 22, y - 4); });
-    segStroke(f === 1, 3, c => { c.moveTo(x - 10, y + 4); c.lineTo(x - 22, y + 12); });
-    // striped tail
-    segStroke(true, 4, c => { c.moveTo(x - 12, y + 6); c.lineTo(x - 26, y + 14); });
-    // eyes
-    seg(true, c => { c.arc(x - 3, y - 1, 1.4, 0, Math.PI * 2); c.arc(x + 3, y - 1, 1.4, 0, Math.PI * 2); });
-  }
-
-  function drawAntenna(phase) {
-    // wifi antenna on roof — 3 wave arcs, lit progressively with phase
-    const ax = CAR_X + CAR_W - 70;
-    const ay = CAR_Y - 4;
-    segStroke(true, 2, c => { c.moveTo(ax, ay); c.lineTo(ax, ay - 18); });
-    seg(true, c => { c.arc(ax, ay - 18, 2, 0, Math.PI * 2); });
+  function drawWifiAntenna(ax, ay, phase) {
+    segStroke(true, 2, c => { c.moveTo(ax, ay); c.lineTo(ax, ay - 30); });
+    seg(true, c => { c.arc(ax, ay - 30, 2, 0, Math.PI * 2); });
     for (let i = 0; i < 3; i++) {
       const on = ((phase + i) % 3) !== 0;
       const r = 6 + i * 6;
       segStroke(on, 2, c => {
-        c.arc(ax + 6, ay - 18, r, -Math.PI / 2.2, Math.PI / 2.2);
+        c.arc(ax + 6, ay - 30, r, -Math.PI / 2.2, Math.PI / 2.2);
       });
     }
   }
 
-  function drawExhaust(phase) {
-    // 3 puffs, scrolling backward
-    const ex = CAR_X - 4;
-    const ey = CAR_Y + CAR_H - 4;
+  function drawExhaust(ex, ey, phase) {
     for (let i = 0; i < 3; i++) {
       const on = ((phase + i) % 3) === 0;
       seg(on, c => { c.arc(ex - 14 - i * 18, ey - i * 4, 6 + i * 2, 0, Math.PI * 2); });
     }
+  }
+
+  // ============================================================
+  //  ANIMALS — silhouettes anchored at (x, y) = top of head
+  // ============================================================
+  ANIMALS.dog = {
+    label: "Driver Dog",
+    draw(x, y, f) {
+      seg(true, c => { c.ellipse(x, y + 28, 14, 18, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x + 2, y + 8, 13, 11, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x + 13, y + 12, 7, 5, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x + 16, y + 16, 3, 3, 0, 0, Math.PI * 2); });
+      seg(f === 0, c => {
+        c.moveTo(x - 4, y + 4); c.lineTo(x - 6, y - 8); c.lineTo(x + 2, y + 2);
+      });
+      seg(f === 1, c => {
+        c.moveTo(x - 4, y + 4); c.lineTo(x - 18, y + 2); c.lineTo(x - 2, y + 8);
+      });
+      segStroke(true, 2, c => { c.moveTo(x - 10, y + 18); c.lineTo(x + 10, y + 18); });
+      seg(true, c => { c.arc(x, y + 22, 2, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x + 11, y + 26, 3, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x + 14, y + 22, 3, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x + 5, y + 6, 1.6, 0, Math.PI * 2); });
+    },
+  };
+
+  ANIMALS.cat = {
+    label: "Backseat Cat",
+    draw(x, y, f) {
+      seg(true, c => { c.ellipse(x, y + 28, 12, 18, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x, y + 8, 12, 11, 0, 0, Math.PI * 2); });
+      seg(true, c => {
+        c.moveTo(x - 10, y + 2); c.lineTo(x - 6, y - 8); c.lineTo(x - 2, y + 2);
+      });
+      seg(true, c => {
+        c.moveTo(x + 2, y + 2); c.lineTo(x + 6, y - 8); c.lineTo(x + 10, y + 2);
+      });
+      segStroke(f === 0, 1.2, c => { c.moveTo(x + 7, y + 9); c.lineTo(x + 18, y + 6); });
+      segStroke(f === 0, 1.2, c => { c.moveTo(x + 7, y + 11); c.lineTo(x + 18, y + 13); });
+      segStroke(f === 1, 1.2, c => { c.moveTo(x + 7, y + 9); c.lineTo(x + 18, y + 13); });
+      segStroke(f === 1, 1.2, c => { c.moveTo(x + 7, y + 11); c.lineTo(x + 18, y + 6); });
+      segStroke(f === 0, 4, c => {
+        c.moveTo(x - 6, y + 30); c.quadraticCurveTo(x - 24, y + 14, x - 16, y - 4);
+      });
+      segStroke(f === 1, 4, c => {
+        c.moveTo(x - 6, y + 30); c.quadraticCurveTo(x - 24, y + 22, x - 22, y + 4);
+      });
+      seg(true, c => { c.arc(x - 4, y + 8, 1.6, 0, Math.PI * 2); c.arc(x + 4, y + 8, 1.6, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x, y + 12, 1.4, 0, Math.PI * 2); });
+    },
+  };
+
+  ANIMALS.parrot = {
+    label: "Tropical Parrot",
+    draw(x, y, f) {
+      seg(true, c => { c.ellipse(x, y + 22, 11, 18, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x, y + 6, 9, 9, 0, 0, Math.PI * 2); });
+      seg(true, c => {
+        c.moveTo(x + 7, y + 4); c.lineTo(x + 16, y + 8); c.lineTo(x + 7, y + 10);
+      });
+      seg(f === 0, c => {
+        c.moveTo(x - 3, y - 4); c.lineTo(x + 1, y - 16); c.lineTo(x + 5, y - 4);
+      });
+      seg(f === 1, c => {
+        c.moveTo(x - 6, y - 4); c.lineTo(x - 4, y - 16); c.lineTo(x + 2, y - 4);
+      });
+      seg(f === 0, c => { c.ellipse(x - 6, y + 18, 6, 12, -0.3, 0, Math.PI * 2); });
+      seg(f === 1, c => { c.ellipse(x - 4, y + 8, 6, 14, 0.5, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x + 4, y + 4, 1.4, 0, Math.PI * 2); });
+      seg(true, c => { c.rect(x - 2, y + 36, 2, 4); c.rect(x + 2, y + 36, 2, 4); });
+    },
+  };
+
+  ANIMALS.raccoon = {
+    label: "Bandit Raccoon",
+    draw(x, y, f) {
+      seg(true, c => { c.ellipse(x, y + 26, 13, 16, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x, y + 8, 12, 10, 0, 0, Math.PI * 2); });
+      seg(true, c => { c.rect(x - 9, y + 5, 18, 4); });
+      seg(true, c => { c.arc(x - 7, y - 1, 3, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x + 7, y - 1, 3, 0, Math.PI * 2); });
+      segStroke(f === 0, 4, c => { c.moveTo(x + 4, y + 22); c.lineTo(x + 16, y - 10); });
+      segStroke(f === 1, 4, c => { c.moveTo(x + 4, y + 22); c.lineTo(x + 22, y + 4); });
+      seg(f === 0, c => { c.arc(x + 16, y - 10, 3, 0, Math.PI * 2); });
+      seg(f === 1, c => { c.arc(x + 22, y + 4, 3, 0, Math.PI * 2); });
+      segStroke(f === 0, 5, c => {
+        c.moveTo(x - 8, y + 30); c.quadraticCurveTo(x - 26, y + 18, x - 22, y + 0);
+      });
+      segStroke(f === 1, 5, c => {
+        c.moveTo(x - 8, y + 30); c.quadraticCurveTo(x - 30, y + 24, x - 28, y + 8);
+      });
+      segStroke(true, 2, c => { c.moveTo(x - 18, y + 18); c.lineTo(x - 14, y + 22); });
+      segStroke(true, 2, c => { c.moveTo(x - 24, y + 10); c.lineTo(x - 20, y + 14); });
+      seg(true, c => { c.arc(x - 4, y + 7, 1.4, 0, Math.PI * 2); c.arc(x + 4, y + 7, 1.4, 0, Math.PI * 2); });
+      seg(true, c => { c.ellipse(x, y + 12, 4, 3, 0, 0, Math.PI * 2); });
+    },
+  };
+
+  ANIMALS.fox = {
+    label: "Sly Fox",
+    draw(x, y, f) {
+      // slim torso
+      seg(true, c => { c.ellipse(x, y + 26, 11, 17, 0, 0, Math.PI * 2); });
+      // head — pointier than dog
+      seg(true, c => { c.ellipse(x, y + 8, 11, 10, 0, 0, Math.PI * 2); });
+      // sharp snout
+      seg(true, c => {
+        c.moveTo(x + 8, y + 6); c.lineTo(x + 18, y + 11); c.lineTo(x + 8, y + 13);
+      });
+      // big triangular ears (always)
+      seg(true, c => {
+        c.moveTo(x - 9, y + 2); c.lineTo(x - 6, y - 12); c.lineTo(x + 1, y + 2);
+      });
+      seg(true, c => {
+        c.moveTo(x + 1, y + 2); c.lineTo(x + 6, y - 12); c.lineTo(x + 9, y + 2);
+      });
+      // bushy tail — 2 frames, big silhouette
+      seg(f === 0, c => {
+        c.ellipse(x - 18, y + 18, 9, 14, -0.4, 0, Math.PI * 2);
+      });
+      seg(f === 1, c => {
+        c.ellipse(x - 22, y + 24, 9, 14, 0.4, 0, Math.PI * 2);
+      });
+      // white tail tip — extra stroke that toggles between two positions
+      segStroke(f === 0, 3, c => {
+        c.moveTo(x - 26, y + 12); c.lineTo(x - 22, y + 8);
+      });
+      segStroke(f === 1, 3, c => {
+        c.moveTo(x - 30, y + 20); c.lineTo(x - 28, y + 16);
+      });
+      // eye + nose
+      seg(true, c => { c.arc(x + 4, y + 6, 1.6, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(x + 17, y + 9, 1.4, 0, Math.PI * 2); });
+    },
+  };
+
+  // ============================================================
+  //  VEHICLES — body, windows, wheels, antennas, exhaust
+  // ============================================================
+  VEHICLES.convertible = {
+    label: "Convertible",
+    width: 280,
+    height: 90,
+    seats: 4,
+    seatPositions(carX, carY) {
+      return [
+        { x: carX + 75,  y: carY - 5 },   // back-left
+        { x: carX + 130, y: carY - 5 },   // back-right
+        { x: carX + 185, y: carY - 5 },   // front-passenger
+        { x: carX + 230, y: carY - 5 },   // driver
+      ];
+    },
+    draw(carX, carY, phase) {
+      const W_ = 280, H_ = 90;
+      const door = carY + 30;
+      seg(true, c => { rrect(c, carX + W_ - 60, door + 10, 60, H_ - 40, 4); }); // hood
+      seg(true, c => { rrect(c, carX, door + 10, 50, H_ - 40, 4); });           // trunk
+      seg(true, c => { rrect(c, carX + 45, door, W_ - 105, H_ - 30, 4); });     // cabin
+      segStroke(true, 3, c => {
+        c.moveTo(carX + W_ - 60, door); c.lineTo(carX + W_ - 78, door - 26);    // windshield
+      });
+      segStroke(true, 3, c => {
+        c.moveTo(carX + 45, door); c.lineTo(carX + 45, door - 18);              // rear roll bar
+      });
+      segStroke(true, 2, c => {
+        c.moveTo(carX + W_ / 2 - 5, door + 4); c.lineTo(carX + W_ / 2 - 5, carY + H_);
+      });
+      seg(true, c => { c.arc(carX + 90, door + 22, 2, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(carX + W_ - 95, door + 22, 2, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(carX + W_ - 6, door + 28, 5, 0, Math.PI * 2); });
+      seg(((phase >> 1) & 1) === 1, c => { c.arc(carX + 6, door + 28, 5, 0, Math.PI * 2); });
+      segStroke(true, 2, c => {
+        c.arc(carX + W_ - 75, door + 8, 6, -0.4, Math.PI + 0.4);                // steering wheel
+      });
+      drawSpokedWheel(carX + 50, carY + H_ + 4, 22, phase);
+      drawSpokedWheel(carX + W_ - 50, carY + H_ + 4, 22, phase);
+      drawWifiAntenna(carX + 25, door + 10, phase);
+      drawExhaust(carX - 4, carY + H_ - 4, phase);
+    },
+  };
+
+  VEHICLES.safari_truck = {
+    label: "Safari Truck",
+    width: 340,
+    height: 100,
+    seats: 5,
+    seatPositions(carX, carY) {
+      const seatY = carY - 5;
+      return [
+        { x: carX + 80,  y: seatY },
+        { x: carX + 130, y: seatY },
+        { x: carX + 180, y: seatY },
+        { x: carX + 230, y: seatY },
+        { x: carX + 285, y: seatY },
+      ];
+    },
+    draw(carX, carY, phase) {
+      const W_ = 340, H_ = 100;
+      const door = carY + 35;
+      // long hood up front
+      seg(true, c => { rrect(c, carX + W_ - 70, door + 5, 70, H_ - 40, 3); });
+      // bullbar
+      segStroke(true, 4, c => {
+        c.moveTo(carX + W_ - 4, door + 10);
+        c.lineTo(carX + W_ - 4, door + H_ - 50);
+      });
+      segStroke(true, 3, c => {
+        c.moveTo(carX + W_ - 12, door + 18);
+        c.lineTo(carX + W_, door + 18);
+      });
+      segStroke(true, 3, c => {
+        c.moveTo(carX + W_ - 12, door + 28);
+        c.lineTo(carX + W_, door + 28);
+      });
+      // chassis (long)
+      seg(true, c => { rrect(c, carX, door + 5, W_ - 70, H_ - 40, 3); });
+      // open passenger area top — three roll-cage hoops, drawn as inverted U
+      [110, 180, 250].forEach(off => {
+        segStroke(true, 3, c => {
+          c.moveTo(carX + off - 28, door);
+          c.lineTo(carX + off - 28, door - 30);
+          c.quadraticCurveTo(carX + off, door - 42, carX + off + 28, door - 30);
+          c.lineTo(carX + off + 28, door);
+        });
+      });
+      // cross-brace between hoops (always on)
+      segStroke(true, 2, c => {
+        c.moveTo(carX + 50, door - 28); c.lineTo(carX + W_ - 80, door - 28);
+      });
+      // rooftop antenna array on rear hoop (visible high)
+      drawWifiAntenna(carX + 70, door - 28, phase);
+      // headlights (stacked)
+      seg(true, c => { c.arc(carX + W_ - 6, door + 14, 4, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(carX + W_ - 6, door + 26, 4, 0, Math.PI * 2); });
+      // taillight blink
+      seg(((phase >> 1) & 1) === 1, c => {
+        c.arc(carX + 6, door + 14, 4, 0, Math.PI * 2);
+      });
+      // spare tire on the back
+      seg(true, c => { c.arc(carX + 18, door + 30, 14, 0, Math.PI * 2); });
+      seg(false, c => { c.arc(carX + 18, door + 30, 9, 0, Math.PI * 2); });
+      seg(true, c => { c.arc(carX + 18, door + 30, 2, 0, Math.PI * 2); });
+      // steering wheel hint in front
+      segStroke(true, 2, c => {
+        c.arc(carX + W_ - 95, door + 12, 6, -0.4, Math.PI + 0.4);
+      });
+      // beefier off-road wheels
+      drawSpokedWheel(carX + 60, carY + H_ + 0, 26, phase);
+      drawSpokedWheel(carX + W_ - 70, carY + H_ + 0, 26, phase);
+      drawExhaust(carX - 4, carY + H_ - 8, phase);
+    },
+  };
+
+  // ============================================================
+  //  PRESETS — pick a vehicle + a cast
+  // ============================================================
+  PRESETS.classic = {
+    label: "Classic Convertible Crew",
+    vehicle: "convertible",
+    cast: ["raccoon", "parrot", "cat", "dog"],
+  };
+  PRESETS.safari = {
+    label: "Safari Squad",
+    vehicle: "safari_truck",
+    cast: ["fox", "raccoon", "parrot", "cat", "dog"],
+  };
+  PRESETS.lone_wolf = {
+    label: "Lone Wolf (driver only)",
+    vehicle: "convertible",
+    cast: ["fox"],
+  };
+
+  // ============================================================
+  //  active preset + persistence
+  // ============================================================
+  let activePresetId = "classic";
+
+  async function loadActivePreset() {
+    try {
+      const r = await fetch("/api/preset");
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.preset && PRESETS[j.preset]) activePresetId = j.preset;
+      }
+    } catch (e) { /* offline ok */ }
+  }
+  async function saveActivePreset(id) {
+    if (!PRESETS[id]) return;
+    activePresetId = id;
+    try {
+      await fetch("/api/preset", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset: id }),
+      });
+    } catch (e) { /* ok */ }
+  }
+
+  // ============================================================
+  //  car dispatcher — uses active preset
+  // ============================================================
+  function drawCar(phase) {
+    const preset = PRESETS[activePresetId] || PRESETS.classic;
+    const veh = VEHICLES[preset.vehicle] || VEHICLES.convertible;
+    const carX = Math.floor((W - veh.width) / 2);
+    const carY = 170;
+    veh.draw(carX, carY, phase);
+    const seats = veh.seatPositions(carX, carY);
+    preset.cast.forEach((id, i) => {
+      const seat = seats[i];
+      if (!seat) return;
+      const animal = ANIMALS[id];
+      if (!animal) return;
+      // alternate frame phase between adjacent seats so animations stagger
+      const f = (i & 1) ? ((phase >> 1) & 1) : (phase & 1);
+      animal.draw(seat.x, seat.y, f);
+    });
   }
 
   // ============================================================
@@ -653,8 +843,43 @@
     }
   });
 
+  // ============================================================
+  //  Preset picker (vehicle + cast)
+  // ============================================================
+  const presetSelect = document.getElementById("preset-select");
+  const presetInfo = document.getElementById("preset-info");
+
+  function describePreset(id) {
+    const p = PRESETS[id];
+    if (!p) return "";
+    const veh = VEHICLES[p.vehicle];
+    const cast = p.cast.map(a => ANIMALS[a]?.label || a).join(", ");
+    return `${veh ? veh.label : p.vehicle} · ${cast}`;
+  }
+  function populatePresetPicker() {
+    if (!presetSelect) return;
+    presetSelect.innerHTML = "";
+    for (const [id, p] of Object.entries(PRESETS)) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = p.label;
+      if (id === activePresetId) opt.selected = true;
+      presetSelect.appendChild(opt);
+    }
+    presetInfo.textContent = describePreset(activePresetId);
+  }
+  if (presetSelect) {
+    presetSelect.addEventListener("change", async (e) => {
+      await saveActivePreset(e.target.value);
+      presetInfo.textContent = describePreset(activePresetId);
+    });
+  }
+  // load + render the picker once the page is ready
+  loadActivePreset().then(populatePresetPicker);
+
   btnSettings.addEventListener("click", async () => {
     modal.hidden = false;
+    populatePresetPicker();
     await loadNetworks();
   });
   btnCloseSettings.addEventListener("click", () => { modal.hidden = true; });
