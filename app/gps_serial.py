@@ -106,8 +106,18 @@ def parse_nmea(line: str) -> Optional[dict]:
             hdop = float(parts[8]) if parts[8] else 0.0
         except ValueError:
             hdop = 0.0
+        try:
+            sats = int(parts[7]) if parts[7] else 0
+        except ValueError:
+            sats = 0
         # rough accuracy: HDOP × ~5m typical (sufficient for the score formula).
-        return {"lat": lat, "lon": lon, "accuracy_m": hdop * 5.0}
+        return {
+            "lat": lat,
+            "lon": lon,
+            "accuracy_m": hdop * 5.0,
+            "hdop": hdop,
+            "sat_count": sats,
+        }
 
     return None
 
@@ -160,10 +170,15 @@ async def gps_serial_loop() -> None:
                 STATE.gps.lon = fix["lon"]
                 if "accuracy_m" in fix:
                     STATE.gps.accuracy_m = fix["accuracy_m"]
+                if "hdop" in fix:
+                    STATE.gps.hdop = fix["hdop"]
+                if "sat_count" in fix:
+                    STATE.gps.sat_count = fix["sat_count"]
                 if last_speed is not None:
                     STATE.gps.speed_mps = last_speed
                 STATE.gps.ts = time.time()
                 STATE.gps.have_fix = True
+                STATE.gps.source = "serial"
         finally:
             try:
                 ser.close()

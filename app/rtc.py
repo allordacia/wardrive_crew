@@ -16,6 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 
 from .state import STATE
 
@@ -45,6 +46,8 @@ async def sync_rtc_at_startup() -> None:
         _, err = await asyncio.wait_for(proc.communicate(), timeout=5)
         if proc.returncode == 0:
             STATE.rtc_synced = True
+            STATE.rtc_synced_ts = time.time()
+            STATE.rtc_device = rtc_dev
             STATE.status_msg = f"rtc synced from {rtc_dev}"
             log.info("rtc: synced from %s", rtc_dev)
         else:

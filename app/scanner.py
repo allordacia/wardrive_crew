@@ -164,6 +164,8 @@ async def scan_loop() -> None:
             ):
                 new += 1
         STATE.last_scan_ts = time.time()
+        STATE.last_scan_seen = len(nets)
+        STATE.last_scan_new = new
         STATE.status_msg = f"scan: {len(nets)} seen, +{new} new"
 
 
@@ -342,6 +344,7 @@ async def _pcap_sampler() -> None:
         # ~250 bytes per management frame is a defensible average.
         approx_pkts = delta // 250
         STATE.add_packets(int(approx_pkts), int(delta))
+        STATE.pcap_bytes_rate_s = delta / MONITOR_SAMPLE_INTERVAL
         STATE.status_msg = f"pcap: +{approx_pkts}p ({delta//1024}KiB/s avg)"
 
 
