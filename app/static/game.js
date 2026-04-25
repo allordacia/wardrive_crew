@@ -706,7 +706,9 @@
         sim.crew_id = s.crew_id || "";
         sim.fleet = Array.isArray(s.fleet) ? s.fleet : [];
         sim.status = s.status || "";
+        sim.snapshot = s;
         updateReadouts();
+        updateRadioPanel(s);
       } catch (e) { /* ignore */ }
     };
     ws.onclose = () => setTimeout(connectWs, 1500);
@@ -757,6 +759,116 @@
     ovr.warn.dataset.active = sim.speed > 180 ? "1" : "0";
     btnMon.dataset.on = sim.monitor_on ? "1" : "0";
     btnMon.textContent = `MONITOR: ${sim.monitor_on ? "ON" : "OFF"}`;
+  }
+
+  // ============================================================
+  //  Radio status panel — per-radio live detail
+  // ============================================================
+  const radioCards = {};
+  document.querySelectorAll(".radio-card").forEach(el => {
+    const id = el.dataset.radio;
+    radioCards[id] = {
+      root: el,
+      state: el.querySelector(".rc-state"),
+      lines: el.querySelectorAll(".rc-line"),
+    };
+  });
+
+  function fmtAge(s) {
+    if (s === null || s === undefined) return "—";
+    if (s < 1) return "now";
+    if (s < 60) return `${Math.round(s)}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    return `${Math.round(s / 3600)}h ago`;
+  }
+  function fmtRate(bytesPerS) {
+    if (!bytesPerS) return "0 B/s";
+    if (bytesPerS < 1024) return `${Math.round(bytesPerS)} B/s`;
+    if (bytesPerS < 1024 * 1024) return `${(bytesPerS / 1024).toFixed(1)} KiB/s`;
+    return `${(bytesPerS / 1024 / 1024).toFixed(1)} MiB/s`;
+  }
+  function fmtCoord(lat, lon) {
+    if (lat == null || lon == null) return "no fix";
+    return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  }
+  function setCard(id, on, state, lines) {
+    const card = radioCards[id];
+    if (!card) return;
+    card.root.dataset.on = on;
+    card.state.textContent = state;
+    for (let i = 0; i < card.lines.length; i++) {
+      card.lines[i].textContent = lines[i] || "—";
+    }
+  }
+
+  function updateRadioPanel(s) {
+    // ----- WIFI -----
+    const w = s.wifi || {};
+    if (w.monitor_on) {
+      setCard("wifi", "1",
+        w.pcap_on ? "MONITOR + PCAP" : "MONITOR",
+        [
+          `${w.monitor_iface || w.iface} · ${fmtRate(w.pcap_bytes_rate_s)}`,
+          `${s.networks_total} BSSIDs · ${s.packets_total} pkts`,
+        ]);
+    } else {
+      const on = w.last_scan_age_s !== null && w.last_scan_age_s < 30;
+      setCard("wifi", on ? "1" : "0",
+        on ? "SCANNING" : "IDLE",
+        [
+          `${w.iface} · scan ${fmtAge(w.last_scan_age_s)}`,
+          `${s.networks_total} BSSIDs · last +${w.last_scan_new || 0} new / ${w.last_scan_seen || 0} seen`,
+        ]);
+    }
+
+    // ----- GPS -----
+    const g = s.gps || {};
+    if (g.have_fix) {
+      const acc = g.accuracy_m ? ` ±${Math.round(g.accuracy_m)}m` : "";
+      const sats = g.sat_count ? ` · ${g.sat_count} sats` : "";
+      const src = g.source === "serial" ? "SERIAL" : g.source === "browser" ? "BROWSER" : "ON";
+      setCard("gps", "1", src,
+        [
+          `${fmtCoord(g.lat, g.lon)}${acc}`,
+          `${(g.speed_mps * 2.237).toFixed(1)} mph${sats} · ${fmtAge(g.age_s)}`,
+        ]);
+    } else {
+      setCard("gps", "0", "NO FIX", ["awaiting fix…", "tap GPS button or set WARDRIVE_GPS_DEVICE"]);
+    }
+
+    // ----- RTC -----
+    const r = s.rtc || {};
+    if (r.synced) {
+      setCard("rtc", "1", "SYNCED",
+        [r.device || "/dev/rtc0", `synced ${fmtAge(r.synced_age_s)}`]);
+    } else {
+      setCard("rtc", "0", "OFF", ["no hardware clock", "set WARDRIVE_RTC_SYNC=1"]);
+    }
+
+    // ----- SDR -----
+    const d = s.sdr || {};
+    if (d.active) {
+      setCard("sdr", "1",
+        d.last_peaks > 0 ? "ACTIVE" : "SWEEPING",
+        [
+          `${d.last_band || "—"} · ${d.last_peaks || 0} peaks`,
+          `${d.bands_count} bands · ${s.rf_signals_total} total · ${fmtAge(d.last_age_s)}`,
+        ]);
+    } else {
+      setCard("sdr", "0", "OFF", ["no SDR sweep running", "set WARDRIVE_SDR_ENABLED=1"]);
+    }
+
+    // ----- LORA -----
+    const l = s.lora || {};
+    if (l.active) {
+      setCard("lora", "1", "MESH",
+        [
+          `${s.crew_id || "?"} · ${(s.fleet || []).length} fleet`,
+          `tx ${l.tx_count}/${fmtAge(l.tx_age_s)} · rx ${l.rx_count}/${fmtAge(l.rx_age_s)}`,
+        ]);
+    } else {
+      setCard("lora", "0", "OFF", ["no Meshtastic node", "set WARDRIVE_LORA_DEVICE=…"]);
+    }
   }
 
   // ============================================================

@@ -127,6 +127,56 @@ html, body {
 }
 .seg.big { font-size: 32px; }
 
+/* Radio status panel — live per-radio detail */
+#radios {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.radio-card {
+  background: linear-gradient(180deg, #0e0e0e 0%, #1a1a1a 100%);
+  border: 2px solid #2a0a04;
+  border-radius: 8px;
+  padding: 6px 10px 8px;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  color: var(--label);
+  min-height: 64px;
+  position: relative;
+  overflow: hidden;
+}
+.radio-card[data-on="1"] { border-color: #2a8a26; }
+.radio-card[data-on="1"] .rc-state { color: #74e070; }
+.radio-card[data-on="0"] .rc-state { color: #b06030; }
+.radio-card[data-on="warn"] { border-color: #b08020; }
+.radio-card[data-on="warn"] .rc-state { color: #f0c040; }
+.rc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.rc-name {
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  font-size: 11px;
+  color: #ff5a3c;
+  text-shadow: 0 0 4px rgba(255,90,60,0.4);
+}
+.rc-state {
+  font-size: 10px;
+  letter-spacing: 1px;
+  font-weight: 800;
+}
+.rc-line {
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.rc-line.muted { opacity: 0.65; font-size: 10px; }
+
 #controls {
   display: flex;
   gap: 10px;

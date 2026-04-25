@@ -110,12 +110,16 @@ def status() -> dict:
 
 @app.post("/api/gps")
 def gps(fix: GpsIn) -> dict:
+    # Server-side serial GPS wins over the browser if it has a recent fix.
+    if STATE.gps.source == "serial" and (time.time() - STATE.gps.ts) < 10:
+        return {"ok": True, "ignored": "serial gps active"}
     STATE.gps.lat = fix.lat
     STATE.gps.lon = fix.lon
     STATE.gps.speed_mps = float(fix.speed_mps or 0.0)
     STATE.gps.accuracy_m = float(fix.accuracy_m or 0.0)
     STATE.gps.ts = time.time()
     STATE.gps.have_fix = True
+    STATE.gps.source = "browser"
     return {"ok": True}
 
 
@@ -236,6 +240,11 @@ async def ws(websocket: WebSocket) -> None:
 
 
 def _snapshot() -> dict:
+    now = time.time()
+
+    def _age(ts: float) -> float | None:
+        return round(now - ts, 1) if ts else None
+
     return {
         "iface": STATE.iface,
         "monitor_iface": STATE.monitor_iface,
@@ -249,6 +258,37 @@ def _snapshot() -> dict:
         "new_window": round(STATE.new_bssids_window, 2),
         "pkt_window": round(STATE.packets_window, 2),
         "rf_window": round(STATE.rf_signals_window, 2),
+        # Per-radio operational detail for the radio status panel
+        "wifi": {
+            "iface": STATE.iface,
+            "monitor_iface": STATE.monitor_iface,
+            "monitor_on": STATE.monitor_on,
+            "pcap_on": STATE.pcap_on,
+            "last_scan_seen": STATE.last_scan_seen,
+            "last_scan_new": STATE.last_scan_new,
+            "last_scan_age_s": _age(STATE.last_scan_ts),
+            "pcap_bytes_rate_s": round(STATE.pcap_bytes_rate_s, 1),
+        },
+        "rtc": {
+            "synced": STATE.rtc_synced,
+            "device": STATE.rtc_device,
+            "synced_age_s": _age(STATE.rtc_synced_ts),
+        },
+        "sdr": {
+            "active": STATE.sdr_active,
+            "bands_count": STATE.sdr_bands_count,
+            "last_band": STATE.sdr_last_band,
+            "last_peaks": STATE.sdr_last_peaks,
+            "last_age_s": _age(STATE.sdr_last_ts),
+        },
+        "lora": {
+            "active": STATE.lora_active,
+            "device": STATE.lora_device,
+            "tx_count": STATE.lora_tx_count,
+            "rx_count": STATE.lora_rx_count,
+            "tx_age_s": _age(STATE.lora_last_tx_ts),
+            "rx_age_s": _age(STATE.lora_last_rx_ts),
+        },
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,
@@ -260,7 +300,7 @@ def _snapshot() -> dict:
                 "mph": b.get("mph", 0),
                 "lat": b.get("lat"),
                 "lon": b.get("lon"),
-                "age_s": round((time.time() - b.get("last_seen", 0)), 1),
+                "age_s": round((now - b.get("last_seen", 0)), 1),
             }
             for cid, b in STATE.fleet.items()
         ],
@@ -270,7 +310,10 @@ def _snapshot() -> dict:
             "lon": STATE.gps.lon,
             "speed_mps": STATE.gps.speed_mps,
             "accuracy_m": STATE.gps.accuracy_m,
-            "age_s": (time.time() - STATE.gps.ts) if STATE.gps.have_fix else None,
+            "hdop": STATE.gps.hdop,
+            "sat_count": STATE.gps.sat_count,
+            "source": STATE.gps.source,
+            "age_s": (now - STATE.gps.ts) if STATE.gps.have_fix else None,
         },
         "status": STATE.status_msg,
         "ts": time.time(),

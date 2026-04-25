@@ -94,17 +94,23 @@ async def sdr_loop() -> None:
     interval = int(os.environ.get("WARDRIVE_SDR_INTERVAL", "60"))
     threshold = float(os.environ.get("WARDRIVE_SDR_THRESHOLD", "-40"))
 
+    bands_list = list(bands)
     STATE.sdr_active = True
+    STATE.sdr_bands_count = len(bands_list)
     log.info("sdr: enabled, bands=%s every %ds, threshold=%.1f dBm",
-             list(bands), interval, threshold)
+             bands_list, interval, threshold)
+    import time as _t
     while True:
         total = 0
-        for band in bands:
+        for band in bands_list:
             n = await _sweep_band(band, threshold)
             total += n
+            STATE.sdr_last_band = band
+            STATE.sdr_last_peaks = n
+            STATE.sdr_last_ts = _t.time()
             if n > 0:
                 log.debug("sdr %s: %d peaks", band, n)
         if total > 0:
             STATE.add_rf_signals(total)
-            STATE.status_msg = f"sdr: {total} peaks across {len(list(bands))} bands"
+            STATE.status_msg = f"sdr: {total} peaks across {len(bands_list)} bands"
         await asyncio.sleep(interval)

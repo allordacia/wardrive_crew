@@ -84,6 +84,7 @@ async def lora_loop() -> None:
             meshtastic.serial_interface.SerialInterface, devPath=device
         )
         STATE.lora_active = True
+        STATE.lora_device = device
 
         def _on_receive(packet, interface):  # noqa: ARG001
             try:
@@ -106,6 +107,8 @@ async def lora_loop() -> None:
                 if not cid or cid == crew_id:
                     return
                 STATE.update_fleet_member(cid, data)
+                STATE.lora_rx_count += 1
+                STATE.lora_last_rx_ts = time.time()
                 log.debug("lora rx beacon from %s: score=%s", cid, data.get("score"))
             except Exception as e:  # noqa: BLE001
                 log.debug("lora rx parse err: %s", e)
@@ -127,6 +130,8 @@ async def lora_loop() -> None:
                     portNum=LORA_APP_PORT,
                     wantAck=False,
                 )
+                STATE.lora_tx_count += 1
+                STATE.lora_last_tx_ts = time.time()
             except Exception as e:  # noqa: BLE001
                 log.warning("lora tx err: %s", e)
             STATE.prune_fleet(FLEET_TIMEOUT)

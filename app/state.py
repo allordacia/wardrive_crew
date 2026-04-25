@@ -58,6 +58,9 @@ class GpsFix:
     accuracy_m: float = 0.0
     ts: float = 0.0
     have_fix: bool = False
+    source: str = "none"     # "serial" | "browser" | "none"
+    sat_count: int = 0
+    hdop: float = 0.0
 
 
 @dataclass
@@ -77,10 +80,25 @@ class State:
     db: sqlite3.Connection = field(default_factory=_connect)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     status_msg: str = "idle"
+    # Per-radio operational detail (surfaced to the radio status panel)
+    last_scan_seen: int = 0
+    last_scan_new: int = 0
+    pcap_bytes_rate_s: float = 0.0
     # Optional AIO v2 peripherals
     rtc_synced: bool = False
+    rtc_synced_ts: float = 0.0
+    rtc_device: str = ""
     sdr_active: bool = False
+    sdr_last_band: str = ""
+    sdr_last_peaks: int = 0
+    sdr_last_ts: float = 0.0
+    sdr_bands_count: int = 0
     lora_active: bool = False
+    lora_device: str = ""
+    lora_tx_count: int = 0
+    lora_rx_count: int = 0
+    lora_last_tx_ts: float = 0.0
+    lora_last_rx_ts: float = 0.0
     crew_id: str = ""
     fleet: dict = field(default_factory=dict)   # crew_id -> last-beacon dict
 
