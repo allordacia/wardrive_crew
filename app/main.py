@@ -102,6 +102,8 @@ async def monitor_on() -> dict:
         msg = await scanner.enable_monitor()
         await scanner.start_pcap()
     except Exception as e:  # noqa: BLE001
+        log.exception("monitor on failed")
+        STATE.status_msg = f"monitor on failed: {e}"
         raise HTTPException(status_code=500, detail=str(e))
     return {"ok": True, "msg": msg, "monitor_on": STATE.monitor_on, "pcap_on": STATE.pcap_on}
 
@@ -111,6 +113,8 @@ async def monitor_off() -> dict:
     try:
         msg = await scanner.disable_monitor()
     except Exception as e:  # noqa: BLE001
+        log.exception("monitor off failed")
+        STATE.status_msg = f"monitor off failed: {e}"
         raise HTTPException(status_code=500, detail=str(e))
     return {"ok": True, "msg": msg, "monitor_on": STATE.monitor_on, "pcap_on": STATE.pcap_on}
 
