@@ -17,10 +17,22 @@ services:
       - NET_ADMIN
       - NET_RAW
     environment:
+      # Wireless adapter on the host. Override per-deployment.
       WARDRIVE_IFACE: ${WARDRIVE_IFACE:-wlan0}
       WARDRIVE_SCAN_INTERVAL: ${WARDRIVE_SCAN_INTERVAL:-8}
       # Set to 1 to flip into monitor mode + start pcap capture on boot.
       WARDRIVE_AUTO_MONITOR: ${WARDRIVE_AUTO_MONITOR:-0}
+      # Use airmon-ng to flip into monitor mode (creates wlanXmon iface).
+      # Set to 0 to use plain `iw set type monitor` instead.
+      WARDRIVE_USE_AIRMON: ${WARDRIVE_USE_AIRMON:-1}
+      # Run `airmon-ng check kill` first so NetworkManager / wpa_supplicant
+      # stop fighting for the interface.
+      WARDRIVE_KILL_INTERFERING: ${WARDRIVE_KILL_INTERFERING:-1}
+      # Serve over HTTPS with a self-signed cert (required so the browser's
+      # Geolocation API is allowed on a LAN IP).
+      WARDRIVE_HTTPS: ${WARDRIVE_HTTPS:-1}
+      WARDRIVE_PORT: ${WARDRIVE_PORT:-8443}
+      WARDRIVE_LOG_LEVEL: ${WARDRIVE_LOG_LEVEL:-INFO}
     volumes:
       - ./data:/data
     restart: unless-stopped

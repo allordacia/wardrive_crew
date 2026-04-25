@@ -49,9 +49,36 @@
     <div id="controls">
       <button id="btn-monitor" class="btn">MONITOR: OFF</button>
       <button id="btn-gps" class="btn">GPS: OFF</button>
+      <button id="btn-settings" class="btn">SETTINGS</button>
       <span id="status">idle</span>
     </div>
   </div>
+
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>WHITELIST &middot; tick networks to exclude from score</span>
+        <button id="btn-close-settings" class="btn small">CLOSE</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-toolbar">
+          <input id="filter" placeholder="filter ssid / bssid…" />
+          <span id="wl-count">0 whitelisted</span>
+          <button id="btn-refresh" class="btn small">REFRESH</button>
+          <button id="btn-save-wl" class="btn small primary">SAVE</button>
+        </div>
+        <div class="net-list-wrap">
+          <table class="net-list">
+            <thead>
+              <tr><th>WL</th><th>SSID</th><th>BSSID</th><th>CH</th><th>SIG</th><th>ENC</th><th>SEEN</th></tr>
+            </thead>
+            <tbody id="net-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/game.js"></script>
 </body>
 </html>

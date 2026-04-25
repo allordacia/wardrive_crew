@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tcpdump \
         wireshark-common \
         aircrack-ng \
+        openssl \
         ca-certificates \
+        procps \
     && rm -rf /var/lib/apt/lists/*
 
 # dumpcap needs to run as non-root in the wireshark group normally; we run
@@ -24,12 +26,18 @@ COPY requirements.txt /srv/
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app /srv/app
+COPY entrypoint.sh /srv/entrypoint.sh
+RUN chmod +x /srv/entrypoint.sh
 
 VOLUME ["/data"]
 ENV WARDRIVE_IFACE=wlan0 \
     WARDRIVE_SCAN_INTERVAL=8 \
     WARDRIVE_AUTO_MONITOR=0 \
+    WARDRIVE_USE_AIRMON=1 \
+    WARDRIVE_KILL_INTERFERING=1 \
+    WARDRIVE_HTTPS=1 \
+    WARDRIVE_PORT=8443 \
     WARDRIVE_LOG_LEVEL=INFO
 
-EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+EXPOSE 8443
+ENTRYPOINT ["/srv/entrypoint.sh"]

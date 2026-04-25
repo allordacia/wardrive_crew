@@ -116,15 +116,63 @@ async def monitor_off() -> dict:
 
 
 @app.get("/api/networks")
-def networks(limit: int = 200) -> JSONResponse:
+def networks(limit: int = 500) -> JSONResponse:
     cur = STATE.db.execute(
-        "SELECT bssid, ssid, channel, signal, encryption, first_seen, last_seen, lat, lon "
-        "FROM networks ORDER BY last_seen DESC LIMIT ?",
-        (max(1, min(limit, 1000)),),
+        "SELECT bssid, ssid, channel, signal, encryption, first_seen, last_seen, "
+        "lat, lon, whitelisted FROM networks ORDER BY last_seen DESC LIMIT ?",
+        (max(1, min(limit, 5000)),),
     )
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     return JSONResponse(rows)
+
+
+class WhitelistIn(BaseModel):
+    bssid: str | None = None
+    ssid: str | None = None
+    whitelisted: bool
+
+
+@app.post("/api/whitelist")
+def whitelist(item: WhitelistIn) -> dict:
+    """Toggle whitelist by BSSID (one row) or by SSID (every BSSID with that
+    SSID). Whitelisted networks no longer count toward the score."""
+    if item.bssid:
+        ok = STATE.set_whitelist(item.bssid.lower(), item.whitelisted)
+        if not ok:
+            raise HTTPException(status_code=404, detail="bssid not found")
+        return {"ok": True, "kind": "bssid", "value": item.bssid.lower()}
+    if item.ssid is not None:
+        n = STATE.whitelist_by_ssid(item.ssid, item.whitelisted)
+        return {"ok": True, "kind": "ssid", "value": item.ssid, "rows": n}
+    raise HTTPException(status_code=400, detail="provide bssid or ssid")
+
+
+class WhitelistBulkIn(BaseModel):
+    bssids: list[str] = Field(default_factory=list)
+    ssids: list[str] = Field(default_factory=list)
+
+
+@app.put("/api/whitelist")
+def whitelist_set(body: WhitelistBulkIn) -> dict:
+    """Replace the whitelist with the given BSSIDs (and any BSSID matching
+    the given SSIDs). Anything not listed is un-whitelisted."""
+    bssids = {b.lower() for b in body.bssids}
+    ssids = set(body.ssids)
+    STATE.db.execute("UPDATE networks SET whitelisted=0")
+    if bssids:
+        STATE.db.executemany(
+            "UPDATE networks SET whitelisted=1 WHERE bssid=?",
+            [(b,) for b in bssids],
+        )
+    if ssids:
+        STATE.db.executemany(
+            "UPDATE networks SET whitelisted=1 WHERE ssid=?",
+            [(s,) for s in ssids],
+        )
+    STATE.db.commit()
+    cur = STATE.db.execute("SELECT COUNT(*) FROM networks WHERE whitelisted=1")
+    return {"ok": True, "whitelisted_count": int(cur.fetchone()[0])}
 
 
 @app.websocket("/ws")
@@ -143,6 +191,7 @@ async def ws(websocket: WebSocket) -> None:
 def _snapshot() -> dict:
     return {
         "iface": STATE.iface,
+        "monitor_iface": STATE.monitor_iface,
         "monitor_on": STATE.monitor_on,
         "pcap_on": STATE.pcap_on,
         "networks_total": STATE.total_networks(),
