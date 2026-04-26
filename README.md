@@ -135,6 +135,25 @@ When the matching env var is set:
 - `POST /api/monitor/on` / `/api/monitor/off` — toggle monitor + pcap.
 - `WS   /ws`            — live state stream for the HUD.
 
+## Renderers (LCD vs 16-bit)
+
+The frontend ships two renderers, switchable from the SETTINGS modal:
+
+- **LCD (Game & Watch)** — the original segment-on/segment-off scene
+  with the cherry-red bezel and pea-green LCD plate. Designed to be
+  legible on **e-ink displays** and low-power hardware. Default on
+  first boot.
+- **16-bit (GBA-style)** — a richer pixel-art scene at native 320×180
+  with parallax sky, scrolling road, dashboard HUD, and a **dynamic
+  cast**: each animal in the car represents an active radio, and
+  reacts (idle ↔ react frames) when its corresponding signal triggers
+  (Dog → wifi, Cat → pcap, Owl → GPS sats, Fox → SDR peaks, Pigeon →
+  LoRa beacons, Raccoon → RTC sync). Inactive radios = empty seats.
+
+Choice persists per-browser (localStorage) **and** server-side
+(`STATE.set_setting('active_renderer', …)`), so the choice survives
+container restarts.
+
 ## Adding new vehicles or animals
 
 The scene is driven by three registries in `app/static/game.js`:
