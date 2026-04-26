@@ -10,6 +10,30 @@
   --label: #f0e6c4;           /* cream silkscreen labels */
 }
 
+/* 16-bit renderer: gunmetal handheld chrome (think GBA SP / dev kit) */
+body[data-active-renderer="sixteen"] {
+  --lcd-bg: #0a0a14;
+  --lcd-bg-2: #14141e;
+  --bezel: #303040;
+  --bezel-2: #1a1a24;
+  --bezel-rim: #050508;
+  --label: #c0c0d0;
+}
+
+/* Show/hide elements per active renderer. */
+body[data-active-renderer="sixteen"] [data-show-when-renderer="lcd"]    { display: none !important; }
+body[data-active-renderer="lcd"]     [data-show-when-renderer="sixteen"] { display: none !important; }
+
+/* Under the 16-bit renderer the canvas itself owns the dashboard, so
+   give it more vertical room and crisp pixel scaling. */
+body[data-active-renderer="sixteen"] #screen {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
 * { box-sizing: border-box; }
 
 html, body {

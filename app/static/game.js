@@ -671,25 +671,35 @@
     drawHud();
   }
 
+  // ============================================================
+  //  Render loop — gated by `running` so the bootstrap can swap
+  //  renderers without page reloads.
+  // ============================================================
+  let running = false;
+  let _rafId = null;
+
   function loop(now) {
+    if (!running) return;
     const dtMs = 1000 / tickHz();
     if (now - lastTick >= dtMs) {
       frame = (frame + 1) | 0;
       lastTick = now;
     }
     render();
-    requestAnimationFrame(loop);
+    _rafId = requestAnimationFrame(loop);
   }
-  requestAnimationFrame(loop);
 
   // ============================================================
   //  websocket — receive backend snapshots
   // ============================================================
+  let _ws = null;
+  let _wsReconnectTimer = null;
   function connectWs() {
+    if (!running) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/ws`;
-    const ws = new WebSocket(url);
-    ws.onmessage = (ev) => {
+    _ws = new WebSocket(url);
+    _ws.onmessage = (ev) => {
       try {
         const s = JSON.parse(ev.data);
         sim.speed = s.speed_mph || 0;
@@ -711,10 +721,11 @@
         updateRadioPanel(s);
       } catch (e) { /* ignore */ }
     };
-    ws.onclose = () => setTimeout(connectWs, 1500);
-    ws.onerror = () => ws.close();
+    _ws.onclose = () => {
+      if (running) _wsReconnectTimer = setTimeout(connectWs, 1500);
+    };
+    _ws.onerror = () => { try { _ws.close(); } catch (e) {} };
   }
-  connectWs();
 
   // ============================================================
   //  readouts + overlay indicators
@@ -1094,4 +1105,44 @@
   modal.addEventListener("click", (ev) => {
     if (ev.target === modal) modal.hidden = true;
   });
+
+  // ============================================================
+  //  Renderer activate/deactivate — owned by renderer-bootstrap.js
+  // ============================================================
+  function activate() {
+    if (running) return;
+    running = true;
+    // Reset the LCD canvas dimensions in case the 16-bit renderer
+    // changed them.
+    cv.width = W;
+    cv.height = H;
+    lastTick = performance.now();
+    connectWs();
+    _rafId = requestAnimationFrame(loop);
+    // Surface the preset picker now that the modal section is shown.
+    populatePresetPicker();
+  }
+  function deactivate() {
+    running = false;
+    if (_rafId !== null) {
+      cancelAnimationFrame(_rafId);
+      _rafId = null;
+    }
+    if (_wsReconnectTimer !== null) {
+      clearTimeout(_wsReconnectTimer);
+      _wsReconnectTimer = null;
+    }
+    if (_ws) {
+      try { _ws.close(); } catch (e) {}
+      _ws = null;
+    }
+    ctx.clearRect(0, 0, W, H);
+  }
+
+  window.WardriveRenderer = window.WardriveRenderer || {};
+  window.WardriveRenderer.lcd = {
+    label: "LCD (Game & Watch)",
+    activate,
+    deactivate,
+  };
 })();

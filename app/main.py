@@ -204,6 +204,33 @@ def set_preset(body: PresetIn) -> dict:
     return {"ok": True, "preset": body.preset}
 
 
+# The frontend ships two renderers: "lcd" (Game-&-Watch segments,
+# e-ink-friendly) and "sixteen" (GBA-style pixel art with the animals
+# acting as the radio status panel). This endpoint just persists the
+# user's choice; the frontend bootstrap dispatches.
+ALLOWED_RENDERERS = {"lcd", "sixteen"}
+
+
+class RendererIn(BaseModel):
+    renderer: str
+
+
+@app.get("/api/renderer")
+def get_renderer() -> dict:
+    return {"renderer": STATE.get_setting("active_renderer", "lcd")}
+
+
+@app.put("/api/renderer")
+def set_renderer(body: RendererIn) -> dict:
+    if body.renderer not in ALLOWED_RENDERERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"renderer must be one of {sorted(ALLOWED_RENDERERS)}",
+        )
+    STATE.set_setting("active_renderer", body.renderer)
+    return {"ok": True, "renderer": body.renderer}
+
+
 @app.put("/api/whitelist")
 def whitelist_set(body: WhitelistBulkIn) -> dict:
     """Replace the whitelist with the given BSSIDs (and any BSSID matching

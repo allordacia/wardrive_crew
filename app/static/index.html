@@ -6,16 +6,17 @@
 <title>WARDRIVE CREW</title>
 <link rel="stylesheet" href="/static/style.css" />
 </head>
-<body>
+<body data-active-renderer="lcd">
   <div id="bezel">
     <div id="brand">
       <span class="brand-mark">WARDRIVE CREW</span>
-      <span class="brand-sub">LCD-77 / Game &amp; Sniff</span>
+      <span class="brand-sub" data-show-when-renderer="lcd">LCD-77 / Game &amp; Sniff</span>
+      <span class="brand-sub" data-show-when-renderer="sixteen">16-BIT / Crew Cab</span>
     </div>
 
     <div id="lcd">
-      <canvas id="screen" width="640" height="360" aria-label="LCD screen"></canvas>
-      <div id="lcd-overlay">
+      <canvas id="screen" width="640" height="360" aria-label="game screen"></canvas>
+      <div id="lcd-overlay" data-show-when-renderer="lcd">
         <div class="ovr-row top">
           <span data-on="net">NET</span>
           <span data-on="pcap">PCAP</span>
@@ -35,7 +36,7 @@
       </div>
     </div>
 
-    <div id="readouts">
+    <div id="readouts" data-show-when-renderer="lcd">
       <div class="readout">
         <div class="label">NETWORKS</div>
         <div class="seg" id="seg-networks">000000</div>
@@ -50,7 +51,7 @@
       </div>
     </div>
 
-    <div id="radios">
+    <div id="radios" data-show-when-renderer="lcd">
       <div class="radio-card" data-radio="wifi">
         <div class="rc-head"><span class="rc-name">WIFI</span><span class="rc-state">—</span></div>
         <div class="rc-line">—</div>
@@ -94,6 +95,18 @@
       </div>
       <div class="modal-body">
         <div class="settings-section">
+          <div class="settings-section-head">DISPLAY &middot; pick the renderer</div>
+          <div class="settings-toolbar">
+            <label for="renderer-select" class="lbl">RENDERER</label>
+            <select id="renderer-select">
+              <option value="lcd">LCD (Game &amp; Watch)</option>
+              <option value="sixteen">16-bit (GBA-style)</option>
+            </select>
+            <span class="muted">LCD is e-ink-friendly. 16-bit shows more live detail.</span>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <div class="settings-section-head">CREW &middot; pick the vehicle &amp; cast</div>
           <div class="settings-toolbar">
             <label for="preset-select" class="lbl">PRESET</label>
@@ -123,6 +136,10 @@
     </div>
   </div>
 
+  <script src="/static/sprites/animals.js"></script>
+  <script src="/static/sprites/vehicles.js"></script>
+  <script src="/static/renderer-sixteen.js"></script>
   <script src="/static/game.js"></script>
+  <script src="/static/renderer-bootstrap.js"></script>
 </body>
 </html>
