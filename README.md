@@ -1,4 +1,4 @@
-# wardrive_crew
+# UConsole: Wardrive Crew!
 
 A dockerized war-driving tool with a Game-&-Watch-style game on top.
 
