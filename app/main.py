@@ -287,6 +287,108 @@ def set_network_flags(bssid: str, body: NetworkFlagsIn) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Per-target detail: observation trail + notes
+# ---------------------------------------------------------------------------
+
+@app.get("/api/network/{bssid}/trail")
+def network_trail(bssid: str, limit: int = 200) -> dict:
+    detail = STATE.network_detail((bssid or "").lower())
+    if detail is None:
+        raise HTTPException(status_code=404, detail="bssid not found")
+    return {
+        "detail": detail,
+        "trail": STATE.network_trail((bssid or "").lower(), limit=limit),
+    }
+
+
+@app.get("/api/bt/{mac}/trail")
+def bt_trail(mac: str, limit: int = 200) -> dict:
+    detail = STATE.bt_detail((mac or "").lower())
+    if detail is None:
+        raise HTTPException(status_code=404, detail="mac not found")
+    return {
+        "detail": detail,
+        "trail": STATE.bt_trail((mac or "").lower(), limit=limit),
+    }
+
+
+class NotesIn(BaseModel):
+    notes: str
+
+
+@app.put("/api/network/{bssid}/notes")
+def set_network_notes(bssid: str, body: NotesIn) -> dict:
+    notes = (body.notes or "")[:1000]
+    if not STATE.set_network_notes((bssid or "").lower(), notes):
+        raise HTTPException(status_code=404, detail="bssid not found")
+    return {"ok": True, "bssid": (bssid or "").lower(), "notes": notes}
+
+
+@app.put("/api/bt/{mac}/notes")
+def set_bt_notes(mac: str, body: NotesIn) -> dict:
+    notes = (body.notes or "")[:1000]
+    if not STATE.set_bt_notes((mac or "").lower(), notes):
+        raise HTTPException(status_code=404, detail="mac not found")
+    return {"ok": True, "mac": (mac or "").lower(), "notes": notes}
+
+
+# ---------------------------------------------------------------------------
+# Auth gate — operator must explicitly acknowledge legal authorization
+# before any *active* actions (channel-dwell, BLE GATT enumerate, etc.)
+# can run. Read-only / passive actions don't need this gate. The flag is
+# persisted in the settings table so the gate sticks across restarts.
+# ---------------------------------------------------------------------------
+
+AUTH_GATE_KEY = "actions_authorized"
+
+
+def _auth_gate_state() -> dict:
+    raw = STATE.get_setting(AUTH_GATE_KEY) or ""
+    parts = raw.split("|", 2)
+    return {
+        "authorized": parts[0] == "1",
+        "ts":        float(parts[1]) if len(parts) > 1 and parts[1] else 0.0,
+        "scope":     parts[2] if len(parts) > 2 else "",
+    }
+
+
+def require_auth_gate() -> None:
+    """Raise 403 unless the operator has acknowledged authorization. Used
+    by active-action endpoints in PR-B."""
+    if not _auth_gate_state()["authorized"]:
+        raise HTTPException(
+            status_code=403,
+            detail=("active actions require operator authorization; "
+                    "POST /api/auth-gate with {\"authorized\": true, \"scope\": \"...\"}"),
+        )
+
+
+@app.get("/api/auth-gate")
+def get_auth_gate() -> dict:
+    return _auth_gate_state()
+
+
+class AuthGateIn(BaseModel):
+    """Acknowledgement that the operator has authorization to run active
+    actions (own network / pentest engagement / CTF / etc.). The `scope`
+    string is logged so there's a record of what the operator declared."""
+    authorized: bool
+    scope: str = ""
+
+
+@app.post("/api/auth-gate")
+def set_auth_gate(body: AuthGateIn) -> dict:
+    if body.authorized:
+        scope = (body.scope or "operator-acknowledged")[:200]
+        STATE.set_setting(AUTH_GATE_KEY, f"1|{time.time()}|{scope}")
+        log.warning("auth gate ENABLED — scope=%r", scope)
+    else:
+        STATE.set_setting(AUTH_GATE_KEY, "0||")
+        log.info("auth gate disabled")
+    return _auth_gate_state()
+
+
 @app.get("/api/iface")
 def list_ifaces() -> dict:
     """List host wireless interfaces and the current selection."""
@@ -500,6 +602,7 @@ def _snapshot() -> dict:
         "bt_devices_total": STATE.bt_devices_total(),
         "bt_targets_total": STATE.bt_targets_total(),
         "bt_visible": STATE.visible_bt_devices(limit=24),
+        "auth_gate": _auth_gate_state(),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,

@@ -190,6 +190,34 @@
     </div>
   </div>
 
+  <div id="auth-gate" class="modal" hidden>
+    <div class="modal-card" style="max-width: 540px;">
+      <div class="modal-head">
+        <span>// AUTHORIZATION REQUIRED</span>
+        <button id="btn-auth-cancel" class="btn small">[ESC] CANCEL</button>
+      </div>
+      <div class="modal-body" style="padding: 14px 14px 16px;">
+        <p style="margin:0 0 8px; color: var(--ink); font-size: 14px; line-height:1.5;">
+          Active actions (channel-dwell, GATT enumerate, targeted captures) can
+          interact with devices around you. Run them only on networks /
+          devices you own or have written authorization to test (own gear,
+          pentest engagement, CTF, etc.).
+        </p>
+        <p style="margin:0 0 10px; color: var(--ink-dim); font-size: 13px;">
+          Describe your scope below. The string is logged and displayed in the
+          target detail panel so there's a record.
+        </p>
+        <input id="auth-scope" type="text" maxlength="200"
+               placeholder="e.g. own home network / pentest #1234 / CTF"
+               style="width: 100%; padding:8px; background: var(--panel-2); border:1px solid var(--frame); color: var(--ink); font-family: inherit; font-size:14px;">
+        <div class="detail-actions" style="margin-top: 12px;">
+          <button id="btn-auth-confirm" class="btn primary small">[Y] I HAVE AUTHORIZATION</button>
+          <button id="btn-auth-revoke" class="btn small">[R] REVOKE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/terminal.js"></script>
 </body>
 </html>
