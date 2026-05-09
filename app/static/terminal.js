@@ -41,6 +41,9 @@
   const segNet = document.getElementById("seg-networks");
   const segPkt = document.getElementById("seg-packets");
   const segVel = document.getElementById("seg-speed");
+  const segSta = document.getElementById("seg-clients");
+  const segBt  = document.getElementById("seg-bt");
+  const segRf  = document.getElementById("seg-rf");
   const statusEl = document.getElementById("status");
   const scopeMeta = document.getElementById("scope-meta");
   const liveMeta  = document.getElementById("live-meta");
@@ -531,10 +534,17 @@
     segNet.textContent = pad(sim.networks, 6);
     segPkt.textContent = pad(sim.packets, 8);
     segVel.textContent = pad(Math.round(sim.speed), 3);
+    if (segSta) segSta.textContent = pad(sim.wifi_clients_total | 0, 5);
+    if (segBt)  segBt.textContent  = pad(sim.bt_devices_total | 0, 5);
+    if (segRf)  segRf.textContent  = pad(sim.rf_devices_total | 0, 5);
     statusEl.textContent = `> ${sim.status || "ok"}`;
 
+    stat.mon.textContent = `[ MON:${sim.monitor_on ? "ON" : "OFF"} ]`;
     stat.mon.dataset.active  = sim.monitor_on ? "1" : "0";
     stat.pcap.dataset.active = sim.pcap_on ? "1" : "0";
+    if (gpsState !== "wait" && gpsState !== "err") {
+      stat.gps.textContent = `[ GPS:${sim.gps_on ? "ON" : "OFF"} ]`;
+    }
     stat.gps.dataset.active  = sim.gps_on ? "1" : "0";
     stat.rtc.dataset.active  = sim.rtc_synced ? "1" : "0";
     stat.sdr.dataset.active  = sim.sdr_active ? "1" : "0";
@@ -546,9 +556,6 @@
       stat.mission.dataset.active = ms === "active" || ms === "debriefing" ? "1" : "0";
     }
     stat.warn.dataset.active = (sim.speed > 180 || (sim.snapshot && sim.snapshot.status && /fail|error/i.test(sim.snapshot.status))) ? "1" : "0";
-
-    btnMon.dataset.on = sim.monitor_on ? "1" : "0";
-    btnMon.textContent = `[F1] MONITOR: ${sim.monitor_on ? "ON" : "OFF"}`;
 
     tbHost.textContent   = `HOST: ${sim.iface || "--"}`;
     tbUptime.textContent = fmtUptime(Date.now() - startTs);
@@ -1079,12 +1086,15 @@
   }
 
   // ============================================================
-  //  monitor button
+  //  Monitor & GPS — pill click toggles
+  //  Both used to be separate buttons in the controls bar; now folded
+  //  into the MON / GPS status pills (click to toggle) and bound to
+  //  F1 / F2 hotkeys further below. Same wire format on the API.
   // ============================================================
-  const btnMon = document.getElementById("btn-monitor");
-  btnMon.addEventListener("click", async () => {
-    btnMon.disabled = true;
-    btnMon.dataset.err = "0";
+  let monBusy = false;
+  async function toggleMonitor() {
+    if (monBusy) return;
+    monBusy = true;
     try {
       const path = sim.monitor_on ? "/api/monitor/off" : "/api/monitor/on";
       const r = await fetch(path, { method: "POST" });
@@ -1094,50 +1104,60 @@
       sim.pcap_on = !!j.pcap_on;
       updateChrome();
     } catch (e) {
-      btnMon.dataset.err = "1";
       statusEl.textContent = `> ! ${e}`;
       pushLog("warn", `! ${e}`);
     } finally {
-      btnMon.disabled = false;
+      monBusy = false;
     }
-  });
+  }
+  if (stat.mon) {
+    stat.mon.style.cursor = "pointer";
+    stat.mon.title = "click or [F1] to toggle monitor mode";
+    stat.mon.addEventListener("click", toggleMonitor);
+  }
 
   // ============================================================
-  //  GPS button — host browser geolocation
+  //  GPS — host browser geolocation
   // ============================================================
-  const btnGps = document.getElementById("btn-gps");
   let gpsWatch = null;
+  let gpsState = "off";  // off|wait|on|err  — drives pill text overrides
   function gpsErrLabel(err) {
     if (err.code === 1) return "DENIED";
     if (err.code === 2) return "NO FIX";
     if (err.code === 3) return "TIMEOUT";
     return "ERR";
   }
-  btnGps.addEventListener("click", () => {
+  function setGpsPill(text, on, err) {
+    if (!stat.gps) return;
+    stat.gps.textContent = `[ ${text} ]`;
+    stat.gps.dataset.active = on ? "1" : "0";
+    stat.gps.dataset.err = err ? "1" : "0";
+  }
+  function toggleGps() {
     if (!("geolocation" in navigator)) {
-      btnGps.dataset.err = "1";
-      btnGps.textContent = "[F2] GPS: UNAVAIL";
+      gpsState = "err";
+      setGpsPill("GPS:UNAVAIL", false, true);
       return;
     }
     if (!window.isSecureContext) {
-      btnGps.dataset.err = "1";
-      btnGps.textContent = "[F2] GPS: HTTPS REQ";
+      gpsState = "err";
+      setGpsPill("GPS:HTTPS REQ", false, true);
       statusEl.textContent = "> ! geolocation needs https. use https://<host>:8443/";
       return;
     }
     if (gpsWatch !== null) {
       navigator.geolocation.clearWatch(gpsWatch);
       gpsWatch = null;
-      btnGps.dataset.on = "0";
-      btnGps.textContent = "[F2] GPS: OFF";
+      gpsState = "off";
+      setGpsPill("GPS:OFF", false, false);
       return;
     }
-    btnGps.textContent = "[F2] GPS: WAIT...";
+    gpsState = "wait";
+    setGpsPill("GPS:WAIT", false, false);
     gpsWatch = navigator.geolocation.watchPosition(
       (pos) => {
-        btnGps.dataset.on = "1";
-        btnGps.dataset.err = "0";
-        btnGps.textContent = "[F2] GPS: ON";
+        gpsState = "on";
+        setGpsPill("GPS:ON", true, false);
         const c = pos.coords;
         fetch("/api/gps", {
           method: "POST",
@@ -1151,14 +1171,19 @@
         }).catch(() => {});
       },
       (err) => {
-        btnGps.dataset.err = "1";
-        btnGps.textContent = `[F2] GPS: ${gpsErrLabel(err)}`;
+        gpsState = "err";
+        setGpsPill(`GPS:${gpsErrLabel(err)}`, false, true);
         statusEl.textContent = `> ! gps: ${err.message || err.code}`;
         gpsWatch = null;
       },
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
     );
-  });
+  }
+  if (stat.gps) {
+    stat.gps.style.cursor = "pointer";
+    stat.gps.title = "click or [F2] to toggle browser GPS";
+    stat.gps.addEventListener("click", toggleGps);
+  }
 
   // ============================================================
   //  CONFIG / whitelist modal
@@ -1329,7 +1354,26 @@
     if (ev.target === modal) modal.hidden = true;
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !modal.hidden) modal.hidden = true;
+    // Don't intercept while the operator is typing into a field (mission
+    // label, filter inputs, etc.).
+    const tag = (ev.target && ev.target.tagName) || "";
+    const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (ev.key === "Escape") {
+      if (!modal.hidden) modal.hidden = true;
+      if (missionModal && !missionModal.hidden) missionModal.hidden = true;
+      return;
+    }
+    if (typing) return;
+    if (ev.key === "F1") { ev.preventDefault(); toggleMonitor(); return; }
+    if (ev.key === "F2") { ev.preventDefault(); toggleGps(); return; }
+    if (ev.key === "F3") {
+      ev.preventDefault();
+      if (btnSettings) btnSettings.click();
+      return;
+    }
+    if (ev.key === "m" || ev.key === "M") {
+      if (btnMission) btnMission.click();
+    }
   });
 
   // ============================================================

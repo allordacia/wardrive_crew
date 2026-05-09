@@ -212,12 +212,9 @@ html, body {
 /* Metrics readouts */
 .readouts {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   padding: 8px;
-}
-.readouts .readout:nth-child(3) {
-  grid-column: 1 / -1;
 }
 .readout {
   background: var(--panel-2);
@@ -225,7 +222,7 @@ html, body {
   padding: 4px 8px 6px;
 }
 .r-label {
-  font-size: 14px;
+  font-size: 12px;
   letter-spacing: 2px;
   color: var(--ink-dim);
   font-weight: 600;
@@ -233,16 +230,15 @@ html, body {
 .r-val {
   font-family: inherit;
   font-weight: 700;
-  font-size: 26px;
+  font-size: 20px;
   color: var(--ink);
-  letter-spacing: 4px;
+  letter-spacing: 3px;
   text-shadow: var(--glow);
 }
 .r-val.accent {
   color: var(--amber);
   text-shadow: 0 0 6px rgba(255, 180, 80, 0.55),
                0 0 14px rgba(255, 180, 80, 0.25);
-  font-size: 34px;
 }
 
 /* Radio bus list */
