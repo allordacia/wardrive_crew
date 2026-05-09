@@ -53,6 +53,21 @@ def _connect() -> sqlite3.Connection:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        -- Wardriving session lifecycle. The operator starts a mission
+        -- (or it auto-starts on first observation), accumulates
+        -- networks / BT / RF / clients in the regular tables, then
+        -- ends it — at which point a debriefing summary is computed
+        -- (counts, points, distance traveled, duration). Wigle uploads
+        -- and DB backups are scoped to the most recently ended mission.
+        CREATE TABLE IF NOT EXISTS missions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at REAL NOT NULL,
+            ended_at REAL,
+            label TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            wigle_uploaded_at REAL,
+            wigle_response TEXT NOT NULL DEFAULT ''
+        );
         -- STA / client side of wifi monitor mode. Each row is one
         -- 802.11 management-frame source MAC (probe-req / assoc-req /
         -- reassoc-req). probed_ssids is a comma-separated list of
@@ -182,6 +197,13 @@ class State:
     # tshark sidecar that captures STAs from the monitor iface. Only set
     # while monitor mode is on AND tshark is actively reading frames.
     wifi_clients_active: bool = False
+    # Mission lifecycle. status is one of:
+    #   "idle"        — no mission in progress
+    #   "active"      — mission running, observations are accumulating
+    #   "debriefing"  — mission ended, summary visible, awaiting dismiss
+    mission_status: str = "idle"
+    current_mission_id: int = 0
+    current_mission_started_at: float = 0.0
 
     def total_networks(self) -> int:
         cur = self.db.execute(
@@ -565,6 +587,172 @@ class State:
         )
         self.db.commit()
         return cur.rowcount > 0
+
+    # ---- mission lifecycle ----
+    def start_mission(self, label: str = "") -> dict:
+        """Start a new mission unless one is already active."""
+        if self.mission_status == "active" and self.current_mission_id:
+            return self.mission_current()
+        # If we were in debriefing, leave the prior mission row intact
+        # (its ended_at + summary are already populated) and just start
+        # a fresh one.
+        now = time.time()
+        cur = self.db.execute(
+            "INSERT INTO missions(started_at, label) VALUES (?, ?)",
+            (now, (label or "")[:64]),
+        )
+        self.db.commit()
+        self.current_mission_id = int(cur.lastrowid or 0)
+        self.current_mission_started_at = now
+        self.mission_status = "active"
+        return self.mission_current()
+
+    def end_mission(self) -> dict:
+        """End the current mission and flip into debriefing. Computes
+        the summary (counts / duration / distance / points) and stores
+        it as JSON on the mission row."""
+        if self.mission_status != "active" or not self.current_mission_id:
+            return self.mission_current()
+        now = time.time()
+        mid = self.current_mission_id
+        started_at = self.current_mission_started_at or now
+        summary = self._compute_mission_summary(started_at, now)
+        try:
+            import json as _json
+            payload = _json.dumps(summary)
+        except Exception:  # noqa: BLE001
+            payload = "{}"
+        self.db.execute(
+            "UPDATE missions SET ended_at=?, summary=? WHERE id=?",
+            (now, payload, mid),
+        )
+        self.db.commit()
+        self.mission_status = "debriefing"
+        return self.mission_current()
+
+    def dismiss_debriefing(self) -> dict:
+        """Acknowledge the debriefing screen. Returns to idle without
+        starting a new mission."""
+        if self.mission_status == "debriefing":
+            self.mission_status = "idle"
+        return self.mission_current()
+
+    def mission_current(self) -> dict:
+        """Return current mission state plus the most recently ended
+        mission's summary (so the debriefing screen has data to show
+        even if the active mission already advanced)."""
+        out = {
+            "status": self.mission_status,
+            "id": self.current_mission_id or None,
+            "started_at": self.current_mission_started_at or None,
+            "summary": None,
+            "label": "",
+        }
+        if self.current_mission_id:
+            cur = self.db.execute(
+                "SELECT id, started_at, ended_at, label, summary, "
+                "wigle_uploaded_at FROM missions WHERE id=?",
+                (self.current_mission_id,),
+            )
+            r = cur.fetchone()
+            if r:
+                import json as _json
+                try:
+                    summary = _json.loads(r[4]) if r[4] else None
+                except Exception:  # noqa: BLE001
+                    summary = None
+                out.update({
+                    "id": r[0],
+                    "started_at": r[1],
+                    "ended_at": r[2],
+                    "label": r[3] or "",
+                    "summary": summary,
+                    "wigle_uploaded_at": r[5],
+                })
+        return out
+
+    def _compute_mission_summary(self, t0: float, t1: float) -> dict:
+        """Tally everything observed within [t0, t1]."""
+        def _count(table: str, col: str = "first_seen") -> int:
+            cur = self.db.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {col} >= ? AND {col} <= ?",
+                (t0, t1),
+            )
+            return int(cur.fetchone()[0])
+
+        def _haversine(lat1, lon1, lat2, lon2) -> float:
+            import math as _m
+            R = 6371000.0
+            phi1, phi2 = _m.radians(lat1), _m.radians(lat2)
+            dphi = _m.radians(lat2 - lat1)
+            dlmb = _m.radians(lon2 - lon1)
+            a = (_m.sin(dphi/2) ** 2
+                 + _m.cos(phi1) * _m.cos(phi2) * _m.sin(dlmb/2) ** 2)
+            return 2 * R * _m.asin(min(1.0, _m.sqrt(a)))
+
+        # Distance: stitch together the GPS coordinates we attached to
+        # each observation in this window. network_observations is the
+        # densest source of breadcrumbs while monitor / scan is running.
+        cur = self.db.execute(
+            "SELECT lat, lon FROM network_observations "
+            "WHERE ts >= ? AND ts <= ? AND lat IS NOT NULL AND lon IS NOT NULL "
+            "ORDER BY ts ASC",
+            (t0, t1),
+        )
+        prev = None
+        meters = 0.0
+        for lat, lon in cur.fetchall():
+            if prev is not None:
+                meters += _haversine(prev[0], prev[1], lat, lon)
+            prev = (lat, lon)
+
+        new_nets    = _count("networks")
+        new_bt      = _count("bt_devices")
+        new_rf      = _count("rf_devices")
+        new_clients = _count("wifi_clients")
+
+        # Simple weighted points formula. New BSSIDs count most, since
+        # finding new wifi was the original wardriving objective.
+        points = (new_nets * 10
+                  + new_clients * 4
+                  + new_bt * 5
+                  + new_rf * 3)
+
+        return {
+            "started_at": t0,
+            "ended_at": t1,
+            "duration_s": round(max(0.0, t1 - t0), 1),
+            "distance_m": round(meters, 1),
+            "new_networks": new_nets,
+            "new_bt_devices": new_bt,
+            "new_rf_devices": new_rf,
+            "new_clients": new_clients,
+            "points": int(points),
+        }
+
+    def list_missions(self, limit: int = 20) -> list[dict]:
+        cur = self.db.execute(
+            "SELECT id, started_at, ended_at, label, summary, "
+            "wigle_uploaded_at FROM missions "
+            "ORDER BY started_at DESC LIMIT ?",
+            (max(1, min(limit, 200)),),
+        )
+        import json as _json
+        out = []
+        for r in cur.fetchall():
+            try:
+                summary = _json.loads(r[4]) if r[4] else None
+            except Exception:  # noqa: BLE001
+                summary = None
+            out.append({
+                "id": r[0],
+                "started_at": r[1],
+                "ended_at": r[2],
+                "label": r[3] or "",
+                "summary": summary,
+                "wigle_uploaded_at": r[5],
+            })
+        return out
 
     def bt_visible_count(self, max_age_s: float = 30.0) -> int:
         cutoff = time.time() - max_age_s

@@ -51,14 +51,15 @@
   const liveTbody = document.getElementById("live-tbody");
 
   const stat = {
-    mon:   document.querySelector('[data-flag="mon"]'),
-    pcap:  document.querySelector('[data-flag="pcap"]'),
-    gps:   document.querySelector('[data-flag="gps"]'),
-    rtc:   document.querySelector('[data-flag="rtc"]'),
-    sdr:   document.querySelector('[data-flag="sdr"]'),
-    lora:  document.querySelector('[data-flag="lora"]'),
-    bt:    document.querySelector('[data-flag="bt"]'),
-    warn:  document.querySelector('[data-flag="warn"]'),
+    mon:    document.querySelector('[data-flag="mon"]'),
+    pcap:   document.querySelector('[data-flag="pcap"]'),
+    gps:    document.querySelector('[data-flag="gps"]'),
+    rtc:    document.querySelector('[data-flag="rtc"]'),
+    sdr:    document.querySelector('[data-flag="sdr"]'),
+    lora:   document.querySelector('[data-flag="lora"]'),
+    bt:     document.querySelector('[data-flag="bt"]'),
+    mission: document.querySelector('[data-flag="mission"]'),
+    warn:   document.querySelector('[data-flag="warn"]'),
   };
   const btTbody = document.getElementById("bt-tbody");
   const rfTbody = document.getElementById("rf-tbody");
@@ -102,6 +103,7 @@
     wifi_clients_visible: [],
     wifi_clients_total: 0,
     wifi_client_targets_total: 0,
+    mission: { status: "idle", id: null, started_at: null, summary: null },
     snapshot: null,
   };
   let prev = JSON.parse(JSON.stringify(sim));
@@ -538,6 +540,11 @@
     stat.sdr.dataset.active  = sim.sdr_active ? "1" : "0";
     stat.lora.dataset.active = sim.lora_active ? "1" : "0";
     if (stat.bt) stat.bt.dataset.active = sim.bt_active ? "1" : "0";
+    if (stat.mission) {
+      const ms = (sim.mission && sim.mission.status) || "idle";
+      stat.mission.textContent = `[ MISSION:${ms.toUpperCase()} ]`;
+      stat.mission.dataset.active = ms === "active" || ms === "debriefing" ? "1" : "0";
+    }
     stat.warn.dataset.active = (sim.speed > 180 || (sim.snapshot && sim.snapshot.status && /fail|error/i.test(sim.snapshot.status))) ? "1" : "0";
 
     btnMon.dataset.on = sim.monitor_on ? "1" : "0";
@@ -1049,6 +1056,7 @@
         sim.wifi_clients_visible = Array.isArray(s.wifi_clients_visible) ? s.wifi_clients_visible : [];
         sim.wifi_clients_total = s.wifi_clients_total || 0;
         sim.wifi_client_targets_total = s.wifi_client_targets_total || 0;
+        sim.mission = s.mission || { status: "idle" };
         sim.snapshot = s;
 
         reactToSnapshot(s);
@@ -1351,6 +1359,206 @@
     updateChrome();
     requestAnimationFrame(loop);
   }
+
+  // ============================================================
+  //  Mission lifecycle modal
+  // ============================================================
+  const missionModal = document.getElementById("mission-modal");
+  const missionPill  = document.getElementById("mission-pill");
+  const btnMission   = document.getElementById("btn-mission");
+  const btnMClose    = document.getElementById("btn-mission-close");
+  const btnMStart    = document.getElementById("btn-mission-start");
+  const btnMEnd      = document.getElementById("btn-mission-end");
+  const btnMDismiss  = document.getElementById("btn-mission-dismiss");
+  const btnMBackup   = document.getElementById("btn-mission-backup");
+  const missionLabel = document.getElementById("mission-label");
+  const missionTitle = document.getElementById("mission-modal-title");
+  const paneIdle     = document.getElementById("mission-idle");
+  const paneActive   = document.getElementById("mission-active");
+  const paneDebrief  = document.getElementById("mission-debrief");
+  const liveBox      = document.getElementById("mission-live");
+  const debriefBox   = document.getElementById("mission-debrief-stats");
+  const debriefRes   = document.getElementById("mission-debrief-result");
+  const historyBox   = document.getElementById("mission-history");
+
+  function openMissionModal() {
+    if (!missionModal) return;
+    missionModal.hidden = false;
+    renderMissionPanes();
+    if ((sim.mission && sim.mission.status) === "idle") {
+      loadMissionHistory();
+    }
+  }
+  function closeMissionModal() { if (missionModal) missionModal.hidden = true; }
+
+  function fmtDur(s) {
+    if (s == null) return "--";
+    s = Math.max(0, s | 0);
+    const h = (s / 3600) | 0;
+    const m = ((s / 60) | 0) % 60;
+    const sec = s % 60;
+    if (h) return `${h}h${pad(m,2)}m${pad(sec,2)}s`;
+    if (m) return `${m}m${pad(sec,2)}s`;
+    return `${sec}s`;
+  }
+  function fmtDist(meters) {
+    if (meters == null) return "--";
+    if (meters < 1000) return `${meters.toFixed(0)} m`;
+    return `${(meters / 1000).toFixed(2)} km`;
+  }
+
+  function renderMissionPanes() {
+    const m = sim.mission || {};
+    const status = m.status || "idle";
+    if (missionTitle) {
+      missionTitle.textContent = `// MISSION :: ${status.toUpperCase()}`;
+    }
+    if (paneIdle)    paneIdle.hidden    = (status !== "idle");
+    if (paneActive)  paneActive.hidden  = (status !== "active");
+    if (paneDebrief) paneDebrief.hidden = (status !== "debriefing");
+
+    if (status === "active" && liveBox) {
+      // Live stats are computed client-side from the sim totals — the
+      // backend hands a final summary back when the mission ends.
+      const elapsed = m.started_at ? Math.max(0, (Date.now()/1000) - m.started_at) : 0;
+      liveBox.innerHTML = `
+        <table class="live-nets" style="margin-bottom:8px;">
+          <tr><td>started</td><td>${m.started_at ? new Date(m.started_at*1000).toLocaleString() : '--'}</td></tr>
+          <tr><td>elapsed</td><td>${escapeHtml(fmtDur(elapsed))}</td></tr>
+          <tr><td>label</td><td>${escapeHtml(m.label || '(none)')}</td></tr>
+          <tr><td>networks total</td><td>${sim.networks|0}</td></tr>
+          <tr><td>bt devices total</td><td>${sim.bt_devices_total|0}</td></tr>
+          <tr><td>rf devices total</td><td>${sim.rf_devices_total|0}</td></tr>
+          <tr><td>wifi clients total</td><td>${sim.wifi_clients_total|0}</td></tr>
+        </table>
+        <div style="font-size:12px; color: var(--ink-dim);">
+          totals are cumulative; the debriefing summary will isolate just
+          what was new during this mission window.
+        </div>
+      `;
+    }
+    if (status === "debriefing" && debriefBox) {
+      const summary = m.summary || {};
+      const pts = summary.points || 0;
+      debriefBox.innerHTML = `
+        <table class="live-nets">
+          <tr><td>points</td><td><span style="color:var(--amber); text-shadow: 0 0 6px rgba(255,180,80,0.5); font-weight:700;">${pts}</span></td></tr>
+          <tr><td>duration</td><td>${escapeHtml(fmtDur(summary.duration_s))}</td></tr>
+          <tr><td>distance</td><td>${escapeHtml(fmtDist(summary.distance_m))}</td></tr>
+          <tr><td>new networks</td><td>${summary.new_networks || 0}</td></tr>
+          <tr><td>new wifi clients</td><td>${summary.new_clients || 0}</td></tr>
+          <tr><td>new bt devices</td><td>${summary.new_bt_devices || 0}</td></tr>
+          <tr><td>new rf devices</td><td>${summary.new_rf_devices || 0}</td></tr>
+          <tr><td>label</td><td>${escapeHtml(m.label || '(none)')}</td></tr>
+        </table>
+      `;
+    }
+  }
+
+  async function loadMissionHistory() {
+    if (!historyBox) return;
+    try {
+      const r = await fetch("/api/missions?limit=8");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const list = await r.json();
+      if (!list.length) {
+        historyBox.innerHTML = '<div style="color:var(--ink-faint); font-size:12px;">// no missions yet</div>';
+        return;
+      }
+      const rows = list.map(mi => {
+        const s = mi.summary || {};
+        const when = mi.started_at ? new Date(mi.started_at*1000).toLocaleString() : '--';
+        return `<tr>
+          <td>${mi.id}</td>
+          <td>${escapeHtml(when)}</td>
+          <td>${escapeHtml(fmtDur(s.duration_s))}</td>
+          <td>${escapeHtml(fmtDist(s.distance_m))}</td>
+          <td>${s.new_networks || 0}n / ${s.new_clients || 0}sta / ${s.new_bt_devices || 0}bt / ${s.new_rf_devices || 0}rf</td>
+          <td><span style="color: var(--amber);">${s.points || 0}</span></td>
+        </tr>`;
+      }).join("");
+      historyBox.innerHTML = `
+        <table class="live-nets">
+          <thead><tr><th>#</th><th>STARTED</th><th>DUR</th><th>DIST</th><th>NEW</th><th>PTS</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    } catch (e) {
+      historyBox.innerHTML = `<div style="color:var(--red); font-size:12px;">! ${e}</div>`;
+    }
+  }
+
+  if (btnMission)   btnMission.addEventListener("click", openMissionModal);
+  if (btnMClose)    btnMClose.addEventListener("click", closeMissionModal);
+  if (missionModal) missionModal.addEventListener("click", (ev) => {
+    if (ev.target === missionModal) closeMissionModal();
+  });
+  if (missionPill)  missionPill.style.cursor = "pointer", missionPill.addEventListener("click", openMissionModal);
+
+  if (btnMStart) btnMStart.addEventListener("click", async () => {
+    const label = (missionLabel && missionLabel.value || "").trim();
+    try {
+      const r = await fetch("/api/mission/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      sim.mission = await r.json();
+      pushLog("sys", `! mission started${label ? ` — ${label}` : ""}`);
+      renderMissionPanes();
+    } catch (e) { pushLog("warn", `! mission start failed: ${e}`); }
+  });
+
+  if (btnMEnd) btnMEnd.addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/mission/end", { method: "POST" });
+      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      sim.mission = await r.json();
+      const pts = (sim.mission.summary && sim.mission.summary.points) || 0;
+      pushLog("sys", `! mission ended — debriefing  (${pts} pts)`);
+      renderMissionPanes();
+    } catch (e) { pushLog("warn", `! mission end failed: ${e}`); }
+  });
+
+  if (btnMDismiss) btnMDismiss.addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/mission/dismiss", { method: "POST" });
+      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      sim.mission = await r.json();
+      pushLog("sys", `! debriefing dismissed`);
+      renderMissionPanes();
+      loadMissionHistory();
+    } catch (e) { pushLog("warn", `! dismiss failed: ${e}`); }
+  });
+
+  if (btnMBackup) btnMBackup.addEventListener("click", async () => {
+    btnMBackup.disabled = true;
+    if (debriefRes) debriefRes.textContent = "backup running...";
+    try {
+      const r = await fetch("/api/backup", { method: "POST" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+      if (debriefRes) debriefRes.textContent = `backup ok :: ${j.path} (${j.bytes|0} bytes)`;
+      pushLog("sys", `! db backup -> ${j.path}`);
+    } catch (e) {
+      if (debriefRes) debriefRes.textContent = `! backup failed: ${e}`;
+      pushLog("warn", `! backup failed: ${e}`);
+    } finally {
+      btnMBackup.disabled = false;
+    }
+  });
+
+  // Keep the modal up-to-date as ws snapshots arrive while it's open.
+  function refreshMissionModalIfOpen() {
+    if (missionModal && !missionModal.hidden) renderMissionPanes();
+  }
+  // Hook into the existing ws callback by piggybacking on updateChrome.
+  const _origUpdateChrome = updateChrome;
+  updateChrome = function() {
+    _origUpdateChrome();
+    refreshMissionModalIfOpen();
+  };
 
   // boot
   pushLog("sys", `! wardrive//terminal online`);
