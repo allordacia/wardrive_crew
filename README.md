@@ -1,39 +1,77 @@
-# UConsole: Wardrive Crew!
+# wardrive_crew :: terminal
 
-A dockerized war-driving tool with a Game-&-Watch-style game on top.
+A dockerized war-driving rig with an 80s-hacker / cyberpunk operator
+terminal on the front. Default target hardware: **ClockworkPi uConsole
+(CM5) + Hackergadgets AIO v1**.
 
-Open a web page on the device, see a car packed with animals — a dog at
-the wheel, a cat in the back, a parrot through the sunroof, and a raccoon
-hanging out the hatch. The car cruises down a side-view LCD road. Every
-new BSSID, every captured packet, every GPS-measured mph makes the car
-roll faster. The wheels spin, the road dashes scroll, the antenna pulses
-the more wifi you scoop up.
+Open the page on the device, get a CRT-style scope: a phosphor-green
+radar PPI sweeping for new BSSIDs, a live spectrum bargraph for the
+SDR, a scrolling sniff log, and a status bus showing every radio in the
+stack. Every new BSSID, every captured packet, every GPS-measured mph
+turns into a blip on the scope. No mascots, no game elements, just a
+panel-and-rivets operator console.
 
 ## What it does
 
 - **Active scan** of nearby wifi using `iw dev <iface> scan` (no monitor
   mode required).
-- **Optional monitor mode + pcap capture** toggled from the web UI.
-  Flips the adapter to monitor with `iw`, starts `dumpcap` with file
-  rotation into `./data/pcaps/`.
-- **GPS from the host device's browser** via the W3C Geolocation API.
-  No need for a serial GPS — the phone/tablet/laptop loading the page is
-  the GPS source. Each new BSSID is stamped with the current fix.
-- **WebSocket-driven HUD** pushes live network/packet/speed numbers to the
-  page at 4 Hz.
-- **LCD handheld animation** — every element has 2–4 fixed frames that
-  toggle on a tick; tick rate scales with capture rate.
+- **Optional monitor mode + pcap capture** toggled from the terminal
+  ([F1] MONITOR). Flips the adapter to monitor with `iw`, starts
+  `dumpcap` with file rotation into `./data/pcaps/`.
+- **GPS** — either the AIO's onboard GNSS via NMEA on the UART (default
+  on the uConsole build) or the host browser's W3C Geolocation API via
+  the [F2] GPS button.
+- **WebSocket-driven scope** pushes live network/packet/RF/speed numbers
+  to the page at 4 Hz. The radar sweep, the spectrum bars, and the sniff
+  log all react to those snapshots.
+- **CRT chrome** — phosphor scanlines, ASCII frames, blinking cursor,
+  monospace everywhere. One renderer, no mode switch, no presets.
 
 ## Hardware
 
 You need a wifi adapter the host can use. For monitor mode + pcap, the
-adapter's chipset/driver must support it. Known-good chipsets include
-Atheros AR9271, Ralink RT3070/RT5370, Realtek RTL8812AU/RTL8814AU, and
-some Intel cards with the right kmod. The container itself doesn't add
-monitor capability — it just flips whatever the host kernel already
-supports.
+adapter's chipset/driver must support it. The recommended build's AIO
+radio supports it; other good chipsets include Atheros AR9271, Ralink
+RT3070/RT5370, Realtek RTL8812AU/RTL8814AU, and some Intel cards with
+the right kmod. The container itself doesn't add monitor capability —
+it just flips whatever the host kernel already supports.
 
 ## Run it
+
+### Recommended: uConsole + Hackergadgets AIO v1
+
+This is the default target. The setup script handles UART freeing, GPS
+rail power, and wifi-iface detection in one shot, then verifies that
+the board is actually ready before you launch.
+
+```bash
+# Run once on the host (CM5 detected by default; CM4 supported as fallback):
+./scripts/uconsole-aio-setup.sh
+sudo reboot          # only if config.txt or cmdline.txt got edited
+
+# Verify after reboot — non-zero exit if anything's still wrong:
+./scripts/uconsole-aio-setup.sh --check
+
+# Then bring it up with the uConsole overlay (defaults to CM5 GPS path):
+docker compose -f docker-compose.yml -f docker-compose.uconsole.yml up --build
+```
+
+For an older CM4 + AIO board, override:
+
+```bash
+WARDRIVE_GPS_DEVICE=/dev/ttyS0 \
+docker compose -f docker-compose.yml -f docker-compose.uconsole.yml up --build
+```
+
+When `WARDRIVE_GPS_DEVICE` is set the server reads NMEA directly off the
+UART — the [F2] GPS button is no longer needed.
+
+The container also runs an AIO sanity check on startup (the same probes
+the setup script does in `--check` mode). Any issue shows up in the
+operator terminal's status line and in the container logs, so you don't
+have to ssh in to figure out why GPS isn't coming up.
+
+### Generic / non-uConsole
 
 ```bash
 # 1. Plug in your wifi adapter, find its name:
@@ -43,136 +81,71 @@ ip -o link | awk -F': ' '/wl/ {print $2}'   # e.g. wlan0, wlan1, wlx00...
 WARDRIVE_IFACE=wlan0 docker compose up --build
 ```
 
-### uConsole + Hackergadgets AIO v2
+Open `https://<host>:8443/` on the device you want to use. The container
+generates a self-signed cert on first boot — your browser will warn
+about it; click "Advanced" -> "Proceed". HTTPS is **required** because
+the W3C Geolocation API is blocked on plain `http://` LAN origins, so
+the [F2] GPS button only works under HTTPS. (When the AIO GPS is wired
+up via UART you can disable HTTPS with `WARDRIVE_HTTPS=0`.)
 
-The AIO v2 board's MT7921AUN wifi (monitor-mode capable) and onboard
-GNSS make this the recommended build. The host's built-in CM4/CM5 wifi
-keeps `wlan0` for the management connection so flipping the AIO into
-monitor mode doesn't kill your browser session.
-
-```bash
-# Run once on the host: enables UART, frees the GPS port from the kernel
-# console, powers on the GPS rail, detects the AIO wifi iface name.
-./scripts/uconsole-aio-setup.sh
-sudo reboot          # only if config.txt or cmdline.txt got edited
-
-# Then bring it up with the AIO overlay:
-docker compose -f docker-compose.yml -f docker-compose.uconsole.yml up --build
-```
-
-For CM5, also set `WARDRIVE_GPS_DEVICE=/dev/ttyAMA0` (CM4 default is
-`/dev/ttyS0`). When `WARDRIVE_GPS_DEVICE` is set the server reads NMEA
-directly off the UART — the GPS button in the UI is no longer needed
-and HTTPS isn't strictly required (the page still ships with HTTPS
-because Geolocation fallback would need it). If hardware is detected on
-first boot, the scene preset auto-selects "Safari Squad".
-
-Then open `https://<host>:8443/` on the device you want to use. The
-container generates a self-signed cert on first boot — your browser
-will warn about it; click "Advanced" → "Proceed". HTTPS is **required**
-because the W3C Geolocation API is blocked on plain `http://` LAN
-origins, so the GPS button only works under HTTPS.
-
-If you're driving around with a phone, hit the **GPS** button on the
-page to grant location and start streaming fixes back to the box. Hit
-the **MONITOR** button to flip the adapter into monitor mode (via
-`airmon-ng`) and start rotating pcaps into `./data/pcaps/`. Hit
-**SETTINGS** to whitelist networks you don't want to count toward the
-score (e.g. your own home AP).
+If you're driving around with a phone, hit [F2] to grant location and
+start streaming fixes back to the box. Hit [F1] to flip the adapter
+into monitor mode (via `airmon-ng`) and start rotating pcaps into
+`./data/pcaps/`. Hit [F3] to open the CONFIG modal and whitelist
+networks you don't want to count toward the score (e.g. your own home
+AP).
 
 ### Environment variables
 
-| Variable                    | Default | Notes                                                                        |
-|-----------------------------|---------|------------------------------------------------------------------------------|
-| `WARDRIVE_IFACE`            | `wlan0` | Wireless interface on the host.                                              |
-| `WARDRIVE_SCAN_INTERVAL`    | `8`     | Seconds between active scans (managed mode only).                            |
-| `WARDRIVE_AUTO_MONITOR`     | `0`     | Set to `1` to start in monitor + pcap on boot.                               |
-| `WARDRIVE_USE_AIRMON`       | `1`     | Use `airmon-ng start` (creates `wlanXmon`). `0` = plain `iw set type monitor`. |
-| `WARDRIVE_KILL_INTERFERING` | `1`     | Run `airmon-ng check kill` first so NetworkManager / wpa_supplicant let go.  |
-| `WARDRIVE_HTTPS`            | `1`     | Serve HTTPS (required for browser Geolocation on a LAN IP).                  |
-| `WARDRIVE_PORT`             | `8443`  | Port to listen on.                                                           |
-| `WARDRIVE_GPS_DEVICE`       | unset   | NMEA serial device (e.g. `/dev/ttyS0` on CM4, `/dev/ttyAMA0` on CM5).        |
-| `WARDRIVE_GPS_BAUD`         | `9600`  | Serial baud rate for the GPS UART.                                           |
-| `WARDRIVE_RTC_SYNC`         | `0`     | `1` to `hwclock -s` from `/dev/rtc0` at startup (AIO v2 PCF85063A).          |
-| `WARDRIVE_SDR_ENABLED`      | `0`     | `1` to run the RTL-SDR `rtl_power` sweep loop.                               |
-| `WARDRIVE_SDR_BANDS`        | ISM+ADSB | Comma list of `rtl_power -f` bands (e.g. `"433M:435M,868M:870M"`).         |
-| `WARDRIVE_SDR_INTERVAL`     | `60`    | Seconds between SDR sweep cycles.                                            |
-| `WARDRIVE_SDR_THRESHOLD`    | `-40`   | dBm threshold for "peak" bins.                                               |
-| `WARDRIVE_LORA_DEVICE`      | unset   | Meshtastic serial device (e.g. `/dev/ttyACM0`); enables LoRa fleet beacons.  |
-| `WARDRIVE_CREW_ID`          | random  | Short crew name broadcast in LoRa beacons (auto-generated if absent).        |
-| `WARDRIVE_LORA_INTERVAL`    | `30`    | Seconds between LoRa beacons.                                                |
-| `WARDRIVE_LOG_LEVEL`        | `INFO`  | Python logging level.                                                        |
+| Variable                    | Default          | Notes                                                                        |
+|-----------------------------|------------------|------------------------------------------------------------------------------|
+| `WARDRIVE_IFACE`            | `wlan1`          | Wireless interface on the host (AIO board on uConsole). `wlan0` for stand-alone adapters.|
+| `WARDRIVE_SCAN_INTERVAL`    | `8`              | Seconds between active scans (managed mode only).                            |
+| `WARDRIVE_AUTO_MONITOR`     | `0`              | Set to `1` to start in monitor + pcap on boot.                               |
+| `WARDRIVE_USE_AIRMON`       | `1`              | Use `airmon-ng start` (creates `wlanXmon`). `0` = plain `iw set type monitor`. |
+| `WARDRIVE_KILL_INTERFERING` | `1`              | Run `airmon-ng check kill` first so NetworkManager / wpa_supplicant let go.  |
+| `WARDRIVE_HTTPS`            | `1`              | Serve HTTPS (required for browser Geolocation on a LAN IP).                  |
+| `WARDRIVE_PORT`             | `8443`           | Port to listen on.                                                           |
+| `WARDRIVE_GPS_DEVICE`       | `/dev/ttyAMA0`*  | NMEA serial device. *uConsole overlay default; unset on the base compose.    |
+| `WARDRIVE_GPS_BAUD`         | `9600`           | Serial baud rate for the GPS UART.                                           |
+| `WARDRIVE_RTC_SYNC`         | `1`*             | `hwclock -s` from `/dev/rtc0` at startup. *uConsole overlay default; `0` on base.|
+| `WARDRIVE_SDR_ENABLED`      | `1`*             | `1` to run the RTL-SDR `rtl_power` sweep loop. *uConsole overlay default; `0` on base.|
+| `WARDRIVE_SDR_BANDS`        | ISM+ADSB         | Comma list of `rtl_power -f` bands (e.g. `"433M:435M,868M:870M"`).           |
+| `WARDRIVE_SDR_INTERVAL`     | `60`             | Seconds between SDR sweep cycles.                                            |
+| `WARDRIVE_SDR_THRESHOLD`    | `-40`            | dBm threshold for "peak" bins.                                               |
+| `WARDRIVE_LORA_DEVICE`      | unset            | Meshtastic serial device (e.g. `/dev/ttyACM0`); enables LoRa fleet beacons.  |
+| `WARDRIVE_CREW_ID`          | random           | Short crew name broadcast in LoRa beacons (auto-generated if absent).        |
+| `WARDRIVE_LORA_INTERVAL`    | `30`             | Seconds between LoRa beacons.                                                |
+| `WARDRIVE_LOG_LEVEL`        | `INFO`           | Python logging level.                                                        |
 
-### AIO v2 peripherals
+### AIO peripherals
 
 When the matching env var is set:
 
 - **RTC (PCF85063A)** — system time is pulled from the battery-backed
   RTC at startup so timestamps stay coherent across cold boots while
-  mobile/offline. Status surfaces as the `RTC` indicator on the LCD.
+  mobile/offline. Surfaces as the `[ RTC ]` flag in the status bus.
 - **RTL-SDR (RTL2832U + R860)** — periodic `rtl_power` sweep across the
   configured bands; each FFT bin above the dBm threshold is counted as
-  an "RF signal" and contributes to the score (so ambient ISM/433/868
-  /915/ADS-B activity makes the car go faster). Spectrum bars render
-  under the car when `SDR` is active.
+  an "RF signal" and contributes to the score. Each peak shows as a
+  cyan blip on the radar plus a live bargraph in the `// SPEC` panel.
 - **LoRa via Meshtastic (SX1262)** — broadcasts a small JSON beacon
   every N seconds on a private Meshtastic app port (`{crew_id, score,
   mph, lat, lon}`); incoming beacons from other crews running
-  wardrive_crew populate `STATE.fleet` and render as ghost-car
-  silhouettes on the road, sorted by score-distance. Requires the
-  SX1262 to have Meshtastic firmware flashed (a one-time step done with
-  the official Meshtastic CLI).
+  wardrive_crew populate `STATE.fleet` and show up as magenta blips on
+  the radar. Requires the SX1262 to have Meshtastic firmware flashed
+  (a one-time step done with the official Meshtastic CLI).
 
 ## Endpoints
 
-- `GET  /`              — the LCD page.
-- `GET  /api/status`    — JSON snapshot of state.
-- `GET  /api/networks`  — recent BSSIDs with last-seen GPS fix + whitelist flag.
-- `POST /api/gps`       — `{lat, lon, speed_mps?, accuracy_m?}`.
-- `POST /api/whitelist` — `{bssid|ssid, whitelisted}` toggle.
-- `PUT  /api/whitelist` — `{bssids:[…], ssids:[…]}` replace the whitelist.
-- `GET  /api/preset` / `PUT /api/preset` — read/set the active scene preset.
-- `POST /api/monitor/on` / `/api/monitor/off` — toggle monitor + pcap.
-- `WS   /ws`            — live state stream for the HUD.
-
-## Renderers (LCD vs 16-bit)
-
-The frontend ships two renderers, switchable from the SETTINGS modal:
-
-- **LCD (Game & Watch)** — the original segment-on/segment-off scene
-  with the cherry-red bezel and pea-green LCD plate. Designed to be
-  legible on **e-ink displays** and low-power hardware. Default on
-  first boot.
-- **16-bit (GBA-style)** — a richer pixel-art scene at native 320×180
-  with parallax sky, scrolling road, dashboard HUD, and a **dynamic
-  cast**: each animal in the car represents an active radio, and
-  reacts (idle ↔ react frames) when its corresponding signal triggers
-  (Dog → wifi, Cat → pcap, Owl → GPS sats, Fox → SDR peaks, Pigeon →
-  LoRa beacons, Raccoon → RTC sync). Inactive radios = empty seats.
-
-Choice persists per-browser (localStorage) **and** server-side
-(`STATE.set_setting('active_renderer', …)`), so the choice survives
-container restarts.
-
-## Adding new vehicles or animals
-
-The scene is driven by three registries in `app/static/game.js`:
-
-```js
-ANIMALS.<id> = { label, draw(x, y, frame) }
-VEHICLES.<id> = { label, width, height, seats, seatPositions(x, y), draw(x, y, phase) }
-PRESETS.<id>  = { label, vehicle: <vehicle id>, cast: [<animal id>, …] }
-```
-
-Drop a new entry into any of those tables and reload the page — the
-preset picker in the SETTINGS modal will pick it up automatically.
-Drawing primitives are `seg(active, fn)` for filled segments and
-`segStroke(active, weight, fn)` for outlines; both follow the LCD
-"ghost when off, ink when on" convention so the new piece blends in
-visually.
-
-The active preset is stored server-side in SQLite (`settings` table)
-and survives container restarts.
+- `GET  /`              -- the operator terminal page.
+- `GET  /api/status`    -- JSON snapshot of state.
+- `GET  /api/networks`  -- recent BSSIDs with last-seen GPS fix + whitelist flag.
+- `POST /api/gps`       -- `{lat, lon, speed_mps?, accuracy_m?}`.
+- `POST /api/whitelist` -- `{bssid|ssid, whitelisted}` toggle.
+- `PUT  /api/whitelist` -- `{bssids:[...], ssids:[...]}` replace the whitelist.
+- `POST /api/monitor/on` / `/api/monitor/off` -- toggle monitor + pcap.
+- `WS   /ws`            -- live state stream for the terminal.
 
 ## Data layout
 
@@ -180,8 +153,8 @@ Inside the bind-mounted `./data/` volume:
 
 ```
 data/
-├── wardrive.sqlite    # bssid table + counters
-└── pcaps/             # rotated pcap files (only when monitor is on)
+|- wardrive.sqlite    # bssid table + counters
+\- pcaps/             # rotated pcap files (only when monitor is on)
 ```
 
 ## Speed formula
@@ -193,11 +166,12 @@ mph = 4
     + 2.237 * gps.speed_mps        # actual movement speed
 ```
 
-The numbers decay so the speedometer eases back down when captures stop.
+The numbers decay so the velocity readout eases back down when captures
+stop. The terminal labels it `VEL`.
 
 ## Legal / be cool
 
-Only use this on networks and in places where capturing is legal for you.
-Active scanning (managed mode) is generally fine; monitor-mode pcap of
-other people's traffic is **not** in many jurisdictions. Default is
-scan-only — monitor mode is opt-in.
+Only use this on networks and in places where capturing is legal for
+you. Active scanning (managed mode) is generally fine; monitor-mode
+pcap of other people's traffic is **not** in many jurisdictions.
+Default is scan-only -- monitor mode is opt-in.

@@ -1,11 +1,14 @@
-# wardrive_crew — runs the war-driving game on the host's wireless interface.
+# wardrive_crew — operator terminal for war-driving on the host's wireless
+# interface.
+#
+# Default target hardware: ClockworkPi uConsole (CM5) + Hackergadgets AIO v1.
+# In that configuration the AIO's wifi typically enumerates as wlan1 (the
+# CM5's built-in wifi keeps wlan0 for the management connection). For other
+# hardware, override WARDRIVE_IFACE.
 #
 # Wireless scanning requires direct access to the host's wifi adapter. We use
 # host networking + NET_ADMIN/NET_RAW caps. If you need monitor mode, the
-# adapter and its driver must support it (e.g. Atheros AR9271, Ralink RT3070,
-# Realtek RTL8812AU, Intel AX2xx with the right kmod, etc.).
-#
-# Override the interface with WARDRIVE_IFACE if it isn't wlan0.
+# adapter and its driver must support it (the AIO v1's chipset does).
 
 services:
   wardrive:
@@ -17,8 +20,10 @@ services:
       - NET_ADMIN
       - NET_RAW
     environment:
-      # Wireless adapter on the host. Override per-deployment.
-      WARDRIVE_IFACE: ${WARDRIVE_IFACE:-wlan0}
+      # Wireless adapter on the host. Defaults to wlan1 (AIO board on a
+      # uConsole, so the host's built-in wifi on wlan0 stays available for
+      # the management connection). Override per-deployment.
+      WARDRIVE_IFACE: ${WARDRIVE_IFACE:-wlan1}
       WARDRIVE_SCAN_INTERVAL: ${WARDRIVE_SCAN_INTERVAL:-8}
       # Set to 1 to flip into monitor mode + start pcap capture on boot.
       WARDRIVE_AUTO_MONITOR: ${WARDRIVE_AUTO_MONITOR:-0}

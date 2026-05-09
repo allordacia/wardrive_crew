@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# wardrive_crew: one-shot host-side setup for uConsole + Hackergadgets AIO v2.
+# wardrive_crew: one-shot host-side setup for uConsole + Hackergadgets AIO v1.
 #
-#   - Detects CM4 vs CM5 to pick the right GPS UART path
+# Default target hardware: ClockworkPi uConsole (CM5) + AIO v1 board.
+# CM4 is still detected and supported (older GPS UART path) but no longer
+# the primary target.
+#
+#   - Detects CM5 (default) vs CM4 to pick the right GPS UART path
 #   - Ensures enable_uart=1 in /boot/firmware/config.txt
 #   - Removes any console=serial0,... from /boot/firmware/cmdline.txt so the
 #     kernel stops trying to drive the GPS UART
-#   - Powers on the GPS rail (via aiov2_ctl if installed; otherwise prints
-#     the pinctrl fallback)
-#   - Detects the AIO v2 wifi (MT7921AUN) iface name for WARDRIVE_IFACE
+#   - Powers on the GPS rail (via aio_ctl / aiov2_ctl if installed; otherwise
+#     prints the pinctrl fallback)
+#   - Detects the AIO wifi iface name for WARDRIVE_IFACE
+#   - Verifies the result: GPS device exists, wifi iface present, RTC node
+#     visible — exits non-zero if mandatory steps are still missing so this
+#     script is safe to chain into automation
 #   - Prints the docker-compose command to run next
 #
 # Run as a regular user; will prompt for sudo only when it needs to edit
@@ -15,11 +22,16 @@
 #
 #   ./scripts/uconsole-aio-setup.sh           # apply
 #   ./scripts/uconsole-aio-setup.sh --dry-run # show what would change
+#   ./scripts/uconsole-aio-setup.sh --check   # verify only, no changes
 
 set -euo pipefail
 
 DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+CHECK_ONLY=0
+case "${1:-}" in
+    --dry-run) DRY_RUN=1 ;;
+    --check)   DRY_RUN=1; CHECK_ONLY=1 ;;
+esac
 
 CONFIG=/boot/firmware/config.txt
 CMDLINE=/boot/firmware/cmdline.txt
@@ -33,14 +45,19 @@ ok()    { note "✓" "$1"; }
 warn()  { note "✗" "$1"; }
 info()  { note "ℹ" "$1"; }
 
+ERRORS=0
+fail() { warn "$1"; ERRORS=$((ERRORS + 1)); }
+
 # --- 1. board detection -----------------------------------------------------
-GPS_DEV=/dev/ttyS0
-BOARD=CM4
+# Default to CM5 (the recommended target for AIO v1). Fall back to CM4 only
+# if the device tree explicitly identifies a bcm2711.
+BOARD=CM5
+GPS_DEV=/dev/ttyAMA0
 if [[ -r /proc/device-tree/compatible ]]; then
     DT=$(tr '\0' '\n' </proc/device-tree/compatible)
-    if grep -q "bcm2712" <<<"$DT"; then
-        BOARD=CM5
-        GPS_DEV=/dev/ttyAMA0
+    if grep -q "bcm2711" <<<"$DT"; then
+        BOARD=CM4
+        GPS_DEV=/dev/ttyS0
     fi
 fi
 ok "detected board: $BOARD (GPS UART = $GPS_DEV)"
@@ -77,23 +94,31 @@ else
 fi
 
 # --- 4. power on the GPS rail ------------------------------------------------
-if command -v aiov2_ctl >/dev/null 2>&1; then
-    info "aiov2_ctl present — enabling GPS rail"
+# AIO v1 ships with `aio_ctl`; AIO v2 used `aiov2_ctl`. Try both, so this
+# script keeps working on either generation.
+AIO_CTL=
+for cand in aio_ctl aiov2_ctl; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        AIO_CTL="$cand"; break
+    fi
+done
+if [[ -n "$AIO_CTL" ]]; then
+    info "$AIO_CTL present — enabling GPS rail"
     if (( DRY_RUN == 0 )); then
-        aiov2_ctl gps on || warn "aiov2_ctl gps on returned non-zero"
+        "$AIO_CTL" gps on || warn "$AIO_CTL gps on returned non-zero"
     fi
 else
-    info "aiov2_ctl not found — install:"
-    info "  pip install --user git+https://github.com/hackergadgets/aiov2_ctl"
+    info "no aio_ctl / aiov2_ctl found — install one of:"
+    info "  pip install --user git+https://github.com/hackergadgets/aio_ctl"
     info "or pull the GPS GPIO high manually with: sudo pinctrl set <pin> op dh"
 fi
 
-# --- 5. MT7921 wifi iface ---------------------------------------------------
+# --- 5. AIO wifi iface ------------------------------------------------------
 MT_IFACE=
 if command -v iw >/dev/null 2>&1; then
     while read -r iface; do
         [[ -z "$iface" ]] && continue
-        # Pick the first non-wlan0 wireless interface — that's the AIO MT7921
+        # Pick the first non-wlan0 wireless interface — that's the AIO radio
         # in our two-radio setup. Override with WARDRIVE_IFACE if you've named
         # things differently.
         if [[ "$iface" != "wlan0" ]]; then
@@ -109,7 +134,28 @@ else
     MT_IFACE=wlan1
 fi
 
-# --- 6. summary -------------------------------------------------------------
+# --- 6. verify ---------------------------------------------------------------
+# Hard checks that block the rest of the system from working. We surface
+# them here (not silently in the container) so the user sees them at setup.
+if [[ -e "$GPS_DEV" ]]; then
+    ok "GPS device $GPS_DEV present"
+else
+    fail "GPS device $GPS_DEV missing — board may need a reboot or aio_ctl gps on"
+fi
+
+if [[ -e "/sys/class/net/$MT_IFACE" ]]; then
+    ok "wifi iface $MT_IFACE present"
+else
+    fail "wifi iface $MT_IFACE not present — AIO board not enumerated yet"
+fi
+
+if [[ -e /dev/rtc0 ]]; then
+    ok "RTC node /dev/rtc0 present"
+else
+    info "no /dev/rtc0 — set WARDRIVE_RTC_SYNC=0 if your AIO has no RTC populated"
+fi
+
+# --- 7. summary -------------------------------------------------------------
 cat <<EOF
 
 =========================================================================
@@ -120,7 +166,7 @@ cat <<EOF
 
   2. Confirm NMEA is flowing once the GPS rail is up:
        sudo cat $GPS_DEV
-       (should see lines starting with \$GNRMC / \$GNGGA / \$GNGSA …)
+       (should see lines starting with \$GNRMC / \$GNGGA / \$GNGSA ...)
 
   3. Bring up wardrive_crew with the uConsole overlay:
 
@@ -133,3 +179,12 @@ cat <<EOF
      in the UI is no longer needed — the server reads the AIO GPS directly.
 =========================================================================
 EOF
+
+if (( CHECK_ONLY )); then
+    if (( ERRORS > 0 )); then
+        warn "verify: $ERRORS issue(s) — fix the above before launching wardrive_crew"
+        exit 1
+    fi
+    ok "verify: AIO board ready"
+fi
+exit 0
