@@ -19,6 +19,7 @@ from . import rtc as rtc_mod
 from . import sdr as sdr_mod
 from . import rtl_433 as rtl433_mod
 from . import wifi_clients as wifi_clients_mod
+from . import features as features_mod
 from . import lora as lora_mod
 from . import bluetooth as bt_mod
 from .state import STATE
@@ -150,6 +151,11 @@ async def lifespan(app: FastAPI):
     log.info("starting wardrive_crew on iface=%s", STATE.iface)
     _check_aio_board()
     await rtc_mod.sync_rtc_at_startup()
+    # All optional loops are now always registered as supervisors.
+    # Each one reads its runtime feature flag (settings table override
+    # or env default) on every iteration so the operator can flip them
+    # on/off from the CONFIG modal without restarting the container.
+    # rtl_433 ↔ rtl_power mutex is enforced inside features.is_enabled.
     tasks = [
         asyncio.create_task(scanner.scan_loop(), name="scan_loop"),
         asyncio.create_task(scanner.decay_loop(), name="decay_loop"),
@@ -157,16 +163,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(lora_mod.lora_loop(), name="lora_loop"),
         asyncio.create_task(bt_mod.bt_loop(), name="bt_loop"),
         asyncio.create_task(wifi_clients_mod.wifi_clients_loop(), name="wifi_clients"),
+        asyncio.create_task(rtl433_mod.rtl_433_loop(), name="rtl_433"),
+        asyncio.create_task(sdr_mod.sdr_loop(), name="sdr_loop"),
     ]
-    # rtl_433 and rtl_power both need the SDR dongle and can't share it.
-    # When both env flags are 1, prefer rtl_433 — it gives device decodes
-    # rather than just bin-above-threshold counts.
-    if os.environ.get("WARDRIVE_RTL433_ENABLED", "0") == "1":
-        if os.environ.get("WARDRIVE_SDR_ENABLED", "0") == "1":
-            log.info("rtl_433 + rtl_power both enabled; rtl_433 wins (dongle is shared)")
-        tasks.append(asyncio.create_task(rtl433_mod.rtl_433_loop(), name="rtl_433"))
-    else:
-        tasks.append(asyncio.create_task(sdr_mod.sdr_loop(), name="sdr_loop"))
     if os.environ.get("WARDRIVE_AUTO_MONITOR", "0") == "1":
         try:
             await scanner.enable_monitor()
@@ -440,6 +439,39 @@ def rf_detail(key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# Runtime feature toggles
+# ---------------------------------------------------------------------------
+
+@app.get("/api/features")
+def list_features() -> dict:
+    return {"features": features_mod.all_states()}
+
+
+class FeatureIn(BaseModel):
+    """``override`` is one of "on" / "off" / "default" (or empty,
+    treated as default). Anything else is rejected."""
+    override: str
+
+
+@app.put("/api/features/{name}")
+def set_feature(name: str, body: FeatureIn) -> dict:
+    if name not in features_mod.FEATURE_NAMES:
+        raise HTTPException(status_code=404, detail=f"unknown feature {name!r}")
+    val = (body.override or "").strip().lower()
+    if val == "default":
+        val = ""
+    if val not in ("on", "off", ""):
+        raise HTTPException(
+            status_code=400,
+            detail="override must be one of 'on', 'off', 'default'",
+        )
+    features_mod.set_override(name, val)
+    log.info("feature %s -> %s", name, val or "default")
+    return {"ok": True, "name": name, "state": next(
+        (f for f in features_mod.all_states() if f["name"] == name), None)}
+
+
+# ---------------------------------------------------------------------------
 # Mission lifecycle + debriefing
 # ---------------------------------------------------------------------------
 
@@ -683,6 +715,7 @@ def _snapshot() -> dict:
         "wifi_client_targets_total": STATE.wifi_client_targets_total(),
         "wifi_clients_visible": STATE.visible_wifi_clients(limit=24),
         "mission": STATE.mission_current(),
+        "features": features_mod.all_states(),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,

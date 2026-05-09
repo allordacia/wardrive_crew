@@ -1166,88 +1166,85 @@
   const modal = document.getElementById("settings");
   const btnSettings = document.getElementById("btn-settings");
   const btnCloseSettings = document.getElementById("btn-close-settings");
-  const btnRefresh = document.getElementById("btn-refresh");
-  const btnSaveWl = document.getElementById("btn-save-wl");
-  const filterEl = document.getElementById("filter");
-  const tbody = document.getElementById("net-tbody");
-  const wlCount = document.getElementById("wl-count");
 
-  let netCache = [];
-  let pendingWl = new Set();
-
-  async function loadNetworks() {
-    const r = await fetch("/api/networks?limit=2000");
-    if (!r.ok) return;
-    netCache = await r.json();
-    pendingWl = new Set(netCache.filter(n => n.whitelisted).map(n => n.bssid));
-    renderNetworks();
-  }
-  function renderNetworks() {
-    const q = (filterEl.value || "").trim().toLowerCase();
-    const rows = netCache
-      .filter(n => !q
-        || (n.ssid || "").toLowerCase().includes(q)
-        || (n.bssid || "").toLowerCase().includes(q))
-      .sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
-    tbody.innerHTML = "";
-    const frag = document.createDocumentFragment();
-    rows.forEach(n => {
-      const tr = document.createElement("tr");
-      const wl = pendingWl.has(n.bssid);
-      if (wl) tr.classList.add("wl");
-      tr.innerHTML =
-        `<td><input type="checkbox" data-bssid="${n.bssid}" ${wl ? "checked" : ""}></td>` +
-        `<td>${escapeHtml(n.ssid || "(hidden)")}</td>` +
-        `<td class="bssid">${n.bssid}</td>` +
-        `<td>${n.channel ?? "-"}</td>` +
-        `<td class="sig">${n.signal != null ? n.signal + " dBm" : "-"}</td>` +
-        `<td>${n.encryption || "-"}</td>` +
-        `<td>${formatAge(n.last_seen)}</td>`;
-      frag.appendChild(tr);
-    });
-    tbody.appendChild(frag);
-    wlCount.textContent = `${pendingWl.size} whitelisted`;
-  }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[c]));
   }
-  function formatAge(ts) {
-    if (!ts) return "-";
-    const dt = (Date.now() / 1000) - ts;
-    if (dt < 60) return `${Math.round(dt)}s`;
-    if (dt < 3600) return `${Math.round(dt / 60)}m`;
-    return `${Math.round(dt / 3600)}h`;
-  }
-  tbody.addEventListener("change", (ev) => {
-    const cb = ev.target.closest('input[type="checkbox"]');
-    if (!cb) return;
-    const bssid = cb.dataset.bssid;
-    if (cb.checked) pendingWl.add(bssid); else pendingWl.delete(bssid);
-    cb.closest("tr").classList.toggle("wl", cb.checked);
-    wlCount.textContent = `${pendingWl.size} whitelisted`;
-  });
-  filterEl.addEventListener("input", renderNetworks);
-  btnRefresh.addEventListener("click", loadNetworks);
-  btnSaveWl.addEventListener("click", async () => {
-    btnSaveWl.disabled = true;
+
+  // ============================================================
+  //  Runtime feature toggles (CONFIG modal)
+  //  Loads feature state on demand + on every modal open. Each
+  //  feature gets a tristate toggle [DEFAULT|ON|OFF] that PUTs to
+  //  /api/features/{name}.
+  // ============================================================
+  const featuresList = document.getElementById("features-list");
+
+  async function loadFeatures() {
+    if (!featuresList) return;
+    let payload;
     try {
-      const r = await fetch("/api/whitelist", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bssids: Array.from(pendingWl), ssids: [] }),
-      });
-      const j = await r.json();
-      statusEl.textContent = `> whitelist saved (${j.whitelisted_count})`;
-      pushLog("sys", `! whitelist saved  count=${j.whitelisted_count}`);
-      await loadNetworks();
+      const r = await fetch("/api/features");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      payload = await r.json();
     } catch (e) {
-      statusEl.textContent = `> ! save failed: ${e}`;
-    } finally {
-      btnSaveWl.disabled = false;
+      featuresList.innerHTML = `<div style="color:var(--red); font-size:13px;">! load failed: ${e}</div>`;
+      return;
     }
-  });
+    renderFeatures(payload.features || []);
+  }
+  function renderFeatures(features) {
+    if (!featuresList) return;
+    featuresList.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (const f of features) {
+      const row = document.createElement("div");
+      row.className = "feature-row";
+      row.dataset.feature = f.name;
+      const stateChip = f.enabled
+        ? '<span class="feat-state live">[ LIVE ]</span>'
+        : '<span class="feat-state dead">[ idle ]</span>';
+      const envHint = `default: ${f.env_default ? "ON" : "OFF"}  (${f.env_var})`;
+      const ov = (f.override || "default").toLowerCase();
+      row.innerHTML = `
+        <div>
+          <div class="feat-name">${escapeHtml(f.name.toUpperCase())} ${stateChip}</div>
+          <div class="feat-meta">${escapeHtml(f.description)}</div>
+          <div class="feat-meta">${escapeHtml(envHint)}</div>
+        </div>
+        <div class="feat-toggle" role="group" aria-label="${escapeHtml(f.name)} override">
+          <button data-val="default" class="${ov === "default" ? "sel" : ""}">DEFAULT</button>
+          <button data-val="on"      class="${ov === "on" ? "sel" : ""}">ON</button>
+          <button data-val="off"     class="${ov === "off" ? "sel off" : ""}">OFF</button>
+        </div>
+      `;
+      frag.appendChild(row);
+    }
+    featuresList.appendChild(frag);
+  }
+  if (featuresList) {
+    featuresList.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest(".feat-toggle button");
+      if (!btn) return;
+      const row = btn.closest(".feature-row");
+      const name = row && row.dataset.feature;
+      if (!name) return;
+      const val = btn.dataset.val;
+      try {
+        const r = await fetch(`/api/features/${encodeURIComponent(name)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ override: val }),
+        });
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+        pushLog("sys", `! feature ${name} -> ${val}`);
+        await loadFeatures();
+      } catch (e) {
+        pushLog("warn", `! feature toggle failed: ${e}`);
+      }
+    });
+  }
 
   // ============================================================
   //  Wifi interface picker (CONFIG modal)
@@ -1325,7 +1322,7 @@
 
   btnSettings.addEventListener("click", async () => {
     modal.hidden = false;
-    await Promise.all([loadIfaces(), loadNetworks()]);
+    await Promise.all([loadIfaces(), loadFeatures()]);
   });
   btnCloseSettings.addEventListener("click", () => { modal.hidden = true; });
   modal.addEventListener("click", (ev) => {

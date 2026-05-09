@@ -622,6 +622,68 @@ html, body {
 }
 #wl-count { font-size: 14px; color: var(--ink-dim); }
 
+/* Runtime feature toggles in CONFIG. */
+.features-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.feature-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--frame);
+}
+.feature-row .feat-name {
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--ink);
+  text-shadow: var(--glow);
+  font-size: 14px;
+}
+.feature-row .feat-meta {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.feature-row .feat-state {
+  font-size: 12px;
+  letter-spacing: 1px;
+  margin-left: 6px;
+}
+.feature-row .feat-state.live { color: var(--ink); text-shadow: var(--glow); }
+.feature-row .feat-state.dead { color: var(--ink-faint); }
+.feat-toggle {
+  display: inline-flex;
+  border: 1px solid var(--frame-2);
+}
+.feat-toggle button {
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--frame-2);
+  color: var(--ink-dim);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.feat-toggle button:last-child { border-right: 0; }
+.feat-toggle button:hover { background: rgba(80,200,120,0.10); }
+.feat-toggle button.sel {
+  background: rgba(80,200,120,0.18);
+  color: var(--ink);
+  text-shadow: var(--glow);
+}
+.feat-toggle button.sel.off {
+  background: rgba(255,80,80,0.18);
+  color: var(--red);
+  text-shadow: 0 0 6px rgba(255,80,80,0.45);
+}
+
 .net-list-wrap {
   overflow: auto;
   background: var(--panel-2);
