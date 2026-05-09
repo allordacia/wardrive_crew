@@ -149,10 +149,30 @@ else
     fail "wifi iface $MT_IFACE not present — AIO board not enumerated yet"
 fi
 
-if [[ -e /dev/rtc0 ]]; then
-    ok "RTC node /dev/rtc0 present"
+RTC_DEV=
+RTC_NAME=
+for r in /sys/class/rtc/rtc*; do
+    [[ -e "$r" ]] || continue
+    n=$(cat "$r/name" 2>/dev/null || true)
+    if [[ "$n" == *pcf85063* ]]; then
+        RTC_DEV="/dev/$(basename "$r")"
+        RTC_NAME="$n"
+        break
+    fi
+    if [[ -z "$RTC_DEV" ]]; then
+        RTC_DEV="/dev/$(basename "$r")"
+        RTC_NAME="$n"
+    fi
+done
+if [[ -n "$RTC_DEV" ]]; then
+    if [[ "$RTC_NAME" == *pcf85063* ]]; then
+        ok "RTC: $RTC_DEV ($RTC_NAME) — AIO PCF85063A bound"
+    else
+        warn "RTC: $RTC_DEV ($RTC_NAME) — not a PCF85063A; AIO RTC may not be bound"
+        info "  add 'dtoverlay=i2c-rtc,pcf85063a,i2c_csi_dsi0' to $CONFIG and reboot"
+    fi
 else
-    info "no /dev/rtc0 — set WARDRIVE_RTC_SYNC=0 if your AIO has no RTC populated"
+    info "no /dev/rtc* — set WARDRIVE_RTC_SYNC=0 or add the i2c-rtc overlay"
 fi
 
 # --- 6b. bluetooth (BLE) ----------------------------------------------------
