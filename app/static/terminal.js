@@ -352,6 +352,17 @@
     ctx.font = '11px "VT323", "Courier New", monospace';
     ctx.textBaseline = "top";
     ctx.fillText(`> SCOPE.SWEEP  ${sim.gps_on ? "GEO=LIVE" : "GEO=NIL"}`, 16, H - 14);
+
+    // // BANDS  2g:N  5g:M  6g:K  ?:U
+    const bands = (sim.snapshot && sim.snapshot.bands) || {};
+    const segs = [
+      `2G:${pad(bands["2g"]|0, 3, " ")}`,
+      `5G:${pad(bands["5g"]|0, 3, " ")}`,
+      `6G:${pad(bands["6g"]|0, 3, " ")}`,
+    ];
+    ctx.fillStyle = PHOS_DM;
+    ctx.fillText(`// BANDS ${segs.join(" ")}`, 220, H - 14);
+
     ctx.fillStyle = sim.lora_active ? MAGENTA : PHOS_FT;
     ctx.fillText(`MESH=${(sim.fleet || []).length}`, W - 86, H - 14);
   }
@@ -698,7 +709,33 @@
         `${(g.speed_mps * 2.237).toFixed(1)} mph${sats} :: ${fmtAge(g.age_s)}`,
       ]);
     } else {
-      setCard("gps", "0", "NO FIX", ["awaiting fix...", "press [F2] or set WARDRIVE_GPS_DEVICE"]);
+      // Distinguish "no NMEA flowing" from "NMEA flowing but no fix yet"
+      // so the operator can tell whether the GPS module is alive.
+      const frames = g.nmea_frames || 0;
+      const fresh  = g.nmea_age_s != null && g.nmea_age_s < 5;
+      const tracked = g.sats_tracked || 0;
+      if (fresh) {
+        // NMEA hot off the wire — tracking sats but no fix yet.
+        setCard("gps", "warn", tracked > 0 ? "NMEA / NO FIX" : "NMEA / 0 SAT", [
+          tracked > 0
+            ? `${tracked} sat tracked :: ${frames} nmea frames`
+            : `nmea ok, antenna sees no sats yet`,
+          tracked > 0
+            ? `cold start: 30-300s outdoors w/ clear sky`
+            : `check antenna cable / move outdoors`,
+        ]);
+      } else if (frames > 0) {
+        // We've heard NMEA at some point but it stopped.
+        setCard("gps", "warn", "NMEA STALE", [
+          `last frame ${fmtAge(g.nmea_age_s)} ago`,
+          `gps rail dropped? check aio_ctl gps on`,
+        ]);
+      } else {
+        setCard("gps", "0", "NO NMEA", [
+          "no data on GPS UART",
+          "check WARDRIVE_GPS_DEVICE / aio_ctl gps on",
+        ]);
+      }
     }
 
     // RTC
