@@ -61,6 +61,7 @@
     warn:  document.querySelector('[data-flag="warn"]'),
   };
   const btTbody = document.getElementById("bt-tbody");
+  const rfTbody = document.getElementById("rf-tbody");
 
   // ----- snapshot state from /ws -------------------------------------------
   const sim = {
@@ -92,6 +93,10 @@
     bt_visible: [],
     bt_devices_total: 0,
     bt_targets_total: 0,
+    rtl433_active: false,
+    rf_visible: [],
+    rf_devices_total: 0,
+    rf_targets_total: 0,
     snapshot: null,
   };
   let prev = JSON.parse(JSON.stringify(sim));
@@ -541,8 +546,9 @@
     if (liveMeta) {
       const vNets = (sim.visible_nets || []).length;
       const vBt   = (sim.bt_visible || []).length;
+      const vRf   = (sim.rf_visible || []).length;
       liveMeta.textContent =
-        `nets ${vNets}/${sim.targets_total || 0}t :: bt ${vBt}/${sim.bt_targets_total || 0}t`;
+        `nets ${vNets}/${sim.targets_total || 0}t :: bt ${vBt}/${sim.bt_targets_total || 0}t :: rf ${vRf}/${sim.rf_targets_total || 0}t`;
     }
   }
 
@@ -690,6 +696,86 @@
   }
 
   // ============================================================
+  //  RF.DEVICES table — rtl_433 consumer-device decodes
+  // ============================================================
+  const rfSeen = new Set();
+  function updateRfDevices() {
+    if (!rfTbody) return;
+    const devs = sim.rf_visible || [];
+    if (devs.length === 0) {
+      const placeholder = sim.rtl433_active
+        ? "// rtl_433 listening, no decodes yet"
+        : "// rtl_433 disabled (set WARDRIVE_RTL433_ENABLED=1)";
+      rfTbody.innerHTML = `<tr class="empty"><td colspan="7">${placeholder}</td></tr>`;
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    const nowSec = Date.now() / 1000;
+    for (const d of devs) {
+      const tr = document.createElement("tr");
+      tr.dataset.rfkey = d.key;
+      if (d.whitelisted) tr.classList.add("row-wl");
+      if (d.targeted)    tr.classList.add("row-tg");
+      if (!rfSeen.has(d.key)) { tr.classList.add("fresh"); rfSeen.add(d.key); }
+      const rssiTxt = (d.rssi != null) ? `${d.rssi} dBm` : "--";
+      const freqTxt = d.freq_mhz ? `${d.freq_mhz.toFixed(2)} MHz` : "--";
+      const ageS = d.last_seen ? Math.max(0, nowSec - d.last_seen) : null;
+      const ageTxt = ageS == null ? "--"
+        : ageS < 60 ? `${Math.round(ageS)}s`
+        : ageS < 3600 ? `${Math.round(ageS / 60)}m`
+        : `${Math.round(ageS / 3600)}h`;
+      const idTxt = d.dev_id || (d.channel ? `ch${d.channel}` : "-");
+      tr.innerHTML =
+        `<td class="c-act">` +
+          `<button class="flag-btn" data-kind="wl" data-on="${d.whitelisted ? 1 : 0}" title="whitelist">[*]</button>` +
+          `<button class="flag-btn" data-kind="tg" data-on="${d.targeted    ? 1 : 0}" title="add to target list">[!]</button>` +
+        `</td>` +
+        `<td class="c-ssid">${escapeHtml(d.model || "?")}</td>` +
+        `<td class="c-bssid">${escapeHtml(idTxt)}</td>` +
+        `<td class="c-sig">${rssiTxt}</td>` +
+        `<td class="c-enc">${escapeHtml(freqTxt)}</td>` +
+        `<td class="c-age" style="color:var(--ink-dim)">${escapeHtml(d.summary || "-")}</td>` +
+        `<td class="c-age">${ageTxt} <span style="opacity:.6">×${d.count|0}</span></td>`;
+      frag.appendChild(tr);
+    }
+    rfTbody.replaceChildren(frag);
+  }
+
+  // RF flag toggles — same UX as wifi/bt; key is the rtl_433 device_key.
+  if (rfTbody) {
+    rfTbody.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest(".flag-btn");
+      if (!btn) return;
+      const tr = btn.closest("tr");
+      const key = tr && tr.dataset.rfkey;
+      if (!key) return;
+      const kind = btn.dataset.kind;
+      const next = btn.dataset.on === "1" ? 0 : 1;
+      const prevOn = btn.dataset.on;
+      btn.dataset.on = String(next);
+      if (kind === "wl") tr.classList.toggle("row-wl", next === 1);
+      if (kind === "tg") tr.classList.toggle("row-tg", next === 1);
+      try {
+        const body = kind === "wl" ? { whitelisted: next === 1 } : { targeted: next === 1 };
+        const r = await fetch(`/api/rf/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+        const verb = next === 1 ? "+" : "-";
+        const tag = kind === "wl" ? "whitelist" : "target";
+        pushLog(kind === "tg" ? "tgt" : "sys", `${verb} rf ${tag}  ${key}`);
+      } catch (e) {
+        btn.dataset.on = prevOn;
+        if (kind === "wl") tr.classList.toggle("row-wl", prevOn === "1");
+        if (kind === "tg") tr.classList.toggle("row-tg", prevOn === "1");
+        pushLog("warn", `! flag toggle failed: ${e}`);
+      }
+    });
+  }
+
+  // ============================================================
   //  Tab switching for the live panel
   // ============================================================
   document.querySelectorAll(".panel-tabs .tab").forEach(tab => {
@@ -769,15 +855,27 @@
       setCard("rtc", "0", "OFF", ["no hardware clock", "set WARDRIVE_RTC_SYNC=1"]);
     }
 
-    // SDR
+    // SDR — surfaced as rtl_433 when that's the active consumer of the
+    // dongle, else legacy rtl_power. They're mutually exclusive so the
+    // two states share a card.
+    const r4 = s.rtl433 || {};
     const d = s.sdr || {};
-    if (d.active) {
-      setCard("sdr", "1", d.last_peaks > 0 ? "ACTIVE" : "SWEEPING", [
+    if (r4.active) {
+      setCard("sdr", "1",
+        (r4.last_age_s != null && r4.last_age_s < 30) ? "RTL_433 / DECODE" : "RTL_433 / IDLE",
+        [
+          `${r4.devices_total || 0} devices :: ${r4.targets_total || 0} target`,
+          r4.last_age_s != null ? `last decode ${fmtAge(r4.last_age_s)}` : "no decodes yet",
+        ]);
+    } else if (d.active) {
+      setCard("sdr", "1", d.last_peaks > 0 ? "RTL_POWER ACTIVE" : "RTL_POWER SWEEPING", [
         `${d.last_band || "--"} :: ${d.last_peaks || 0} peak`,
         `${d.bands_count} band :: ${s.rf_signals_total} tot :: ${fmtAge(d.last_age_s)}`,
       ]);
     } else {
-      setCard("sdr", "0", "OFF", ["no SDR sweep running", "set WARDRIVE_SDR_ENABLED=1"]);
+      setCard("sdr", "0", "OFF",
+        ["no SDR consumer running",
+         "set WARDRIVE_RTL433_ENABLED=1 (decoder) or WARDRIVE_SDR_ENABLED=1 (peaks)"]);
     }
 
     // LORA
@@ -843,6 +941,10 @@
         sim.bt_visible = Array.isArray(s.bt_visible) ? s.bt_visible : [];
         sim.bt_devices_total = s.bt_devices_total || 0;
         sim.bt_targets_total = s.bt_targets_total || 0;
+        sim.rtl433_active = !!s.rtl433_active;
+        sim.rf_visible = Array.isArray(s.rf_visible) ? s.rf_visible : [];
+        sim.rf_devices_total = s.rf_devices_total || 0;
+        sim.rf_targets_total = s.rf_targets_total || 0;
         sim.snapshot = s;
 
         reactToSnapshot(s);
@@ -852,6 +954,7 @@
         updateRadioPanel(s);
         updateLiveNets();
         updateBtDevices();
+        updateRfDevices();
       } catch (e) { /* ignore */ }
     };
     _ws.onclose = () => {

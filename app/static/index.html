@@ -97,6 +97,7 @@
         <div class="panel-tabs">
           <button class="tab active" data-tab="nets">// LIVE.NETS</button>
           <button class="tab" data-tab="bt">// BT.DEVICES</button>
+          <button class="tab" data-tab="rf">// RF.DEVICES</button>
           <span class="tab-meta">
             <span id="live-meta">--</span>
             <span class="legend"><span class="lg lg-wl">[*] WL</span> <span class="lg lg-tg">[!] TGT</span></span>
@@ -136,6 +137,25 @@
             </thead>
             <tbody id="bt-tbody">
               <tr class="empty"><td colspan="6">// awaiting BT scan...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="live-wrap" data-tab-pane="rf" hidden>
+          <table class="live-nets">
+            <thead>
+              <tr>
+                <th class="c-act">FLAG</th>
+                <th class="c-ssid">MODEL</th>
+                <th class="c-bssid">ID</th>
+                <th class="c-sig">RSSI</th>
+                <th class="c-enc">FREQ</th>
+                <th class="c-age">SUMMARY</th>
+                <th class="c-age">AGE</th>
+              </tr>
+            </thead>
+            <tbody id="rf-tbody">
+              <tr class="empty"><td colspan="7">// rtl_433 idle</td></tr>
             </tbody>
           </table>
         </div>

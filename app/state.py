@@ -53,6 +53,26 @@ def _connect() -> sqlite3.Connection:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        -- Consumer-device decodes from rtl_433. Each row is one logical
+        -- device (rtl_433 model+id pair); count tracks how many packets
+        -- we've seen, last_payload is the most recent JSON line.
+        CREATE TABLE IF NOT EXISTS rf_devices (
+            device_key TEXT PRIMARY KEY,
+            model TEXT NOT NULL,
+            dev_id TEXT NOT NULL DEFAULT '',
+            channel TEXT NOT NULL DEFAULT '',
+            freq_mhz REAL NOT NULL DEFAULT 0,
+            rssi INTEGER,
+            first_seen REAL NOT NULL,
+            last_seen REAL NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            summary TEXT NOT NULL DEFAULT '',
+            last_payload TEXT NOT NULL DEFAULT '',
+            lat REAL,
+            lon REAL,
+            whitelisted INTEGER NOT NULL DEFAULT 0,
+            targeted INTEGER NOT NULL DEFAULT 0
+        );
         INSERT OR IGNORE INTO counters(name, value) VALUES ('packets', 0);
         INSERT OR IGNORE INTO counters(name, value) VALUES ('pcap_bytes', 0);
         """
@@ -136,6 +156,10 @@ class State:
     bt_last_scan_ts: float = 0.0
     bt_last_scan_new: int = 0
     bt_last_scan_seen: int = 0
+    # rtl_433 consumer-device decoder (mutually exclusive with rtl_power).
+    rtl433_active: bool = False
+    rtl433_cmd: str = ""
+    rtl433_last_ts: float = 0.0
 
     def total_networks(self) -> int:
         cur = self.db.execute(
@@ -307,6 +331,113 @@ class State:
             "WHERE tracker_type != '' GROUP BY tracker_type"
         )
         return {row[0]: int(row[1]) for row in cur.fetchall()}
+
+    # ---- rtl_433 consumer-device helpers ----
+    def add_rf_device(
+        self,
+        key: str,
+        model: str,
+        dev_id: str,
+        channel: str,
+        freq_mhz: float,
+        rssi: Optional[int],
+        summary: str,
+        raw: str,
+    ) -> bool:
+        """Insert/update a decoded rtl_433 device. Returns True if it was
+        new. Increments ``count`` on every call so the operator can see
+        which devices chatter the most."""
+        if not key:
+            return False
+        now = time.time()
+        lat = self.gps.lat if self.gps.have_fix else None
+        lon = self.gps.lon if self.gps.have_fix else None
+        cur = self.db.execute("SELECT 1 FROM rf_devices WHERE device_key=?", (key,))
+        new = cur.fetchone() is None
+        if new:
+            self.db.execute(
+                "INSERT INTO rf_devices(device_key, model, dev_id, channel, "
+                "freq_mhz, rssi, first_seen, last_seen, count, summary, "
+                "last_payload, lat, lon) "
+                "VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?)",
+                (key, model, dev_id, channel, freq_mhz, rssi,
+                 now, now, summary or "", raw or "", lat, lon),
+            )
+        else:
+            self.db.execute(
+                "UPDATE rf_devices SET "
+                "rssi=COALESCE(?, rssi), last_seen=?, count=count+1, "
+                "summary=COALESCE(NULLIF(?, ''), summary), "
+                "last_payload=?, "
+                "lat=COALESCE(?, lat), lon=COALESCE(?, lon) "
+                "WHERE device_key=?",
+                (rssi, now, summary or "", raw or "", lat, lon, key),
+            )
+        self.db.commit()
+        return new
+
+    def visible_rf_devices(self, limit: int = 24, max_age_s: float = 600.0) -> list[dict]:
+        cutoff = time.time() - max_age_s
+        cur = self.db.execute(
+            "SELECT device_key, model, dev_id, channel, freq_mhz, rssi, "
+            "last_seen, count, summary, whitelisted, targeted "
+            "FROM rf_devices WHERE last_seen >= ? "
+            "ORDER BY last_seen DESC LIMIT ?",
+            (cutoff, max(1, min(limit, 200))),
+        )
+        return [
+            {
+                "key": r[0], "model": r[1], "dev_id": r[2], "channel": r[3],
+                "freq_mhz": r[4], "rssi": r[5], "last_seen": r[6],
+                "count": r[7], "summary": r[8] or "",
+                "whitelisted": bool(r[9]), "targeted": bool(r[10]),
+            }
+            for r in cur.fetchall()
+        ]
+
+    def rf_devices_total(self) -> int:
+        cur = self.db.execute(
+            "SELECT COUNT(*) FROM rf_devices WHERE whitelisted=0"
+        )
+        return int(cur.fetchone()[0])
+
+    def rf_targets_total(self) -> int:
+        cur = self.db.execute("SELECT COUNT(*) FROM rf_devices WHERE targeted=1")
+        return int(cur.fetchone()[0])
+
+    def set_rf_whitelist(self, key: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE rf_devices SET whitelisted=? WHERE device_key=?",
+            (1 if on else 0, key or ""),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def set_rf_target(self, key: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE rf_devices SET targeted=? WHERE device_key=?",
+            (1 if on else 0, key or ""),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def rf_detail(self, key: str) -> dict | None:
+        cur = self.db.execute(
+            "SELECT device_key, model, dev_id, channel, freq_mhz, rssi, "
+            "first_seen, last_seen, count, summary, last_payload, "
+            "whitelisted, targeted FROM rf_devices WHERE device_key=?",
+            (key or "",),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "key": r[0], "model": r[1], "dev_id": r[2], "channel": r[3],
+            "freq_mhz": r[4], "rssi": r[5],
+            "first_seen": r[6], "last_seen": r[7], "count": r[8],
+            "summary": r[9] or "", "last_payload": r[10] or "",
+            "whitelisted": bool(r[11]), "targeted": bool(r[12]),
+        }
 
     def bt_visible_count(self, max_age_s: float = 30.0) -> int:
         cutoff = time.time() - max_age_s
