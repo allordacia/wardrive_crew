@@ -59,6 +59,19 @@ def _freq_to_channel(freq_mhz: int) -> Optional[int]:
     return None
 
 
+def _freq_to_band(freq_mhz: int) -> str:
+    if 2400 <= freq_mhz <= 2495:
+        return "2g"
+    # The 5 GHz / 6 GHz boundary is sloppy in the wild — some drivers
+    # report 5925 MHz and up as 5 GHz. Use 5925 as the cut so 6 GHz
+    # devices (Wi-Fi 6E) get their own bucket.
+    if 5000 <= freq_mhz < 5925:
+        return "5g"
+    if 5925 <= freq_mhz <= 7125:
+        return "6g"
+    return ""
+
+
 def parse_iw_scan(text: str) -> list[dict]:
     """Parse the textual output of ``iw dev <iface> scan``."""
     networks: list[dict] = []
@@ -72,6 +85,7 @@ def parse_iw_scan(text: str) -> list[dict]:
                 "bssid": m.group(1).lower(),
                 "ssid": "",
                 "channel": None,
+                "band": "",
                 "signal": None,
                 "encryption": "open",
                 "_has_rsn": False,
@@ -87,7 +101,9 @@ def parse_iw_scan(text: str) -> list[dict]:
             continue
         m = _FREQ_RE.match(raw)
         if m:
-            cur["channel"] = _freq_to_channel(int(m.group(1)))
+            freq = int(m.group(1))
+            cur["channel"] = _freq_to_channel(freq)
+            cur["band"] = _freq_to_band(freq)
             continue
         m = _SIGNAL_RE.match(raw)
         if m:
@@ -180,7 +196,8 @@ async def scan_loop() -> None:
         new = 0
         for n in nets:
             if STATE.add_network(
-                n["bssid"], n["ssid"], n["channel"], n["signal"], n["encryption"]
+                n["bssid"], n["ssid"], n["channel"], n["signal"], n["encryption"],
+                band=n.get("band", ""),
             ):
                 new += 1
         STATE.last_scan_ts = time.time()

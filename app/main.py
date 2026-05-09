@@ -523,9 +523,13 @@ def _snapshot() -> dict:
             "accuracy_m": STATE.gps.accuracy_m,
             "hdop": STATE.gps.hdop,
             "sat_count": STATE.gps.sat_count,
+            "sats_tracked": STATE.gps.sats_tracked,
+            "nmea_frames": STATE.gps.nmea_frames,
+            "nmea_age_s": _age(STATE.gps.nmea_last_ts),
             "source": STATE.gps.source,
             "age_s": (now - STATE.gps.ts) if STATE.gps.have_fix else None,
         },
+        "bands": STATE.bssid_counts_by_band(),
         "status": STATE.status_msg,
         "ts": time.time(),
     }

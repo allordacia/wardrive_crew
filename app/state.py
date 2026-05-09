@@ -29,7 +29,8 @@ def _connect() -> sqlite3.Connection:
             lat REAL,
             lon REAL,
             whitelisted INTEGER NOT NULL DEFAULT 0,
-            targeted INTEGER NOT NULL DEFAULT 0
+            targeted INTEGER NOT NULL DEFAULT 0,
+            band TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS bt_devices (
             mac TEXT PRIMARY KEY,
@@ -55,12 +56,14 @@ def _connect() -> sqlite3.Connection:
         INSERT OR IGNORE INTO counters(name, value) VALUES ('pcap_bytes', 0);
         """
     )
-    # Migration for dbs created before the whitelisted / targeted columns existed.
+    # Migration for dbs created before these columns existed.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(networks)").fetchall()}
     if "whitelisted" not in cols:
         conn.execute("ALTER TABLE networks ADD COLUMN whitelisted INTEGER NOT NULL DEFAULT 0")
     if "targeted" not in cols:
         conn.execute("ALTER TABLE networks ADD COLUMN targeted INTEGER NOT NULL DEFAULT 0")
+    if "band" not in cols:
+        conn.execute("ALTER TABLE networks ADD COLUMN band TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
 
@@ -74,8 +77,15 @@ class GpsFix:
     ts: float = 0.0
     have_fix: bool = False
     source: str = "none"     # "serial" | "browser" | "none"
-    sat_count: int = 0
+    sat_count: int = 0       # sats *used in fix* (from $GxGGA field 7)
     hdop: float = 0.0
+
+    # Diagnostics for the "no fix yet" case so the operator terminal can
+    # tell the difference between "no NMEA flowing at all" and "NMEA OK
+    # but the antenna can't see enough satellites yet".
+    nmea_frames: int = 0       # total parseable NMEA sentences seen
+    nmea_last_ts: float = 0.0  # wallclock time of the most recent sentence
+    sats_tracked: int = 0      # sats *visible* (from $GxGSV totals); ≥ sat_count
 
 
 @dataclass
@@ -308,8 +318,15 @@ class State:
         channel: Optional[int],
         signal: Optional[int],
         encryption: Optional[str],
+        band: str = "",
     ) -> bool:
-        """Insert/update network. Returns True if it was new."""
+        """Insert/update network. Returns True if it was new.
+
+        ``band`` is "2g" / "5g" / "6g" / "" — derived by the scanner from
+        the advertisement frequency. Recorded so we can give per-band
+        BSSID counts on the operator scope without re-deriving from the
+        channel number (channel 1 in 2.4 GHz != channel 1 in 6 GHz).
+        """
         now = time.time()
         lat = self.gps.lat if self.gps.have_fix else None
         lon = self.gps.lon if self.gps.have_fix else None
@@ -332,22 +349,42 @@ class State:
         if new:
             self.db.execute(
                 "INSERT INTO networks(bssid, ssid, channel, signal, encryption, "
-                "first_seen, last_seen, lat, lon, whitelisted) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (bssid, ssid, channel, signal, encryption, now, now, lat, lon, whitelisted),
+                "first_seen, last_seen, lat, lon, whitelisted, band) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (bssid, ssid, channel, signal, encryption,
+                 now, now, lat, lon, whitelisted, band or ""),
             )
             if not whitelisted:
                 self.new_bssids_window += 1
         else:
+            # NULLIF('', NULL) trick lets us update band only when we have
+            # a non-empty value (some drivers don't always emit freq).
             self.db.execute(
                 "UPDATE networks SET ssid=COALESCE(NULLIF(?, ''), ssid), "
                 "channel=COALESCE(?, channel), signal=COALESCE(?, signal), "
                 "encryption=COALESCE(?, encryption), last_seen=?, "
-                "lat=COALESCE(?, lat), lon=COALESCE(?, lon) WHERE bssid=?",
-                (ssid, channel, signal, encryption, now, lat, lon, bssid),
+                "lat=COALESCE(?, lat), lon=COALESCE(?, lon), "
+                "band=CASE WHEN ?='' THEN band ELSE ? END "
+                "WHERE bssid=?",
+                (ssid, channel, signal, encryption, now, lat, lon,
+                 band or "", band or "", bssid),
             )
         self.db.commit()
         return new and not whitelisted
+
+    def bssid_counts_by_band(self) -> dict:
+        """Return non-whitelisted BSSID counts per band for the operator
+        scope ({2g, 5g, 6g, unknown})."""
+        cur = self.db.execute(
+            "SELECT band, COUNT(*) FROM networks WHERE whitelisted=0 GROUP BY band"
+        )
+        out = {"2g": 0, "5g": 0, "6g": 0, "unknown": 0}
+        for band, n in cur.fetchall():
+            if band in out:
+                out[band] = int(n)
+            else:
+                out["unknown"] += int(n)
+        return out
 
     def add_packets(self, n: int, bytes_: int = 0) -> None:
         if n <= 0 and bytes_ <= 0:

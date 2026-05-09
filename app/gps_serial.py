@@ -67,10 +67,18 @@ def _checksum_ok(line: str) -> bool:
 
 
 def parse_nmea(line: str) -> Optional[dict]:
-    """Parse a single NMEA sentence into {lat, lon, speed_mps?, accuracy_m?}.
+    """Parse a single NMEA sentence.
 
-    Recognized: $GxRMC (lat/lon/speed), $GxGGA (lat/lon + HDOP-derived
-    accuracy). Returns None for unparseable / no-fix sentences.
+    Returns:
+      - {"kind": "fix", lat, lon, ...}                — RMC/GGA with valid fix
+      - {"kind": "nofix", "sats_used": N}             — GGA with fix_quality=0
+      - {"kind": "tracked", "sats_tracked": N}        — GSV total-in-view
+      - None                                          — unparseable / unrecognised
+
+    The "nofix" / "tracked" returns let the loop record that NMEA is
+    flowing and the antenna sees *some* sats even before the receiver
+    has solved a fix — useful for the operator terminal so it can tell
+    "GPS hardware OK, no fix yet" from "no NMEA at all".
     """
     if not line.startswith("$") or "*" not in line:
         return None
@@ -83,41 +91,54 @@ def parse_nmea(line: str) -> Optional[dict]:
     if sentence == "RMC":
         # $GxRMC,time,A/V,lat,NS,lon,EW,speed_knots,track,date,...
         if len(parts) < 8 or parts[2] != "A":
-            return None
+            return {"kind": "nofix", "sats_used": 0}
         lat = _nmea_to_decimal(parts[3], parts[4])
         lon = _nmea_to_decimal(parts[5], parts[6])
         if lat is None or lon is None:
-            return None
+            return {"kind": "nofix", "sats_used": 0}
         try:
             speed_kn = float(parts[7]) if parts[7] else 0.0
         except ValueError:
             speed_kn = 0.0
-        return {"lat": lat, "lon": lon, "speed_mps": speed_kn * KNOTS_TO_MPS}
+        return {"kind": "fix", "lat": lat, "lon": lon, "speed_mps": speed_kn * KNOTS_TO_MPS}
 
     if sentence == "GGA":
         # $GxGGA,time,lat,NS,lon,EW,fix_quality,num_sats,hdop,alt,...
-        if len(parts) < 9 or parts[6] in ("", "0"):
+        if len(parts) < 9:
             return None
-        lat = _nmea_to_decimal(parts[2], parts[3])
-        lon = _nmea_to_decimal(parts[4], parts[5])
-        if lat is None or lon is None:
-            return None
-        try:
-            hdop = float(parts[8]) if parts[8] else 0.0
-        except ValueError:
-            hdop = 0.0
         try:
             sats = int(parts[7]) if parts[7] else 0
         except ValueError:
             sats = 0
+        if parts[6] in ("", "0"):
+            return {"kind": "nofix", "sats_used": sats}
+        lat = _nmea_to_decimal(parts[2], parts[3])
+        lon = _nmea_to_decimal(parts[4], parts[5])
+        if lat is None or lon is None:
+            return {"kind": "nofix", "sats_used": sats}
+        try:
+            hdop = float(parts[8]) if parts[8] else 0.0
+        except ValueError:
+            hdop = 0.0
         # rough accuracy: HDOP × ~5m typical (sufficient for the score formula).
         return {
+            "kind": "fix",
             "lat": lat,
             "lon": lon,
             "accuracy_m": hdop * 5.0,
             "hdop": hdop,
             "sat_count": sats,
         }
+
+    if sentence == "GSV":
+        # $GxGSV,total_msgs,msg_num,total_sats_in_view,...
+        if len(parts) < 4:
+            return None
+        try:
+            tracked = int(parts[3]) if parts[3] else 0
+        except ValueError:
+            tracked = 0
+        return {"kind": "tracked", "sats_tracked": tracked}
 
     return None
 
@@ -161,19 +182,40 @@ async def gps_serial_loop() -> None:
                     line = raw.decode("ascii", errors="ignore").strip()
                 except Exception:  # noqa: BLE001
                     continue
-                fix = parse_nmea(line)
-                if fix is None:
+                msg = parse_nmea(line)
+                if msg is None:
                     continue
-                if "speed_mps" in fix:
-                    last_speed = fix["speed_mps"]
-                STATE.gps.lat = fix["lat"]
-                STATE.gps.lon = fix["lon"]
-                if "accuracy_m" in fix:
-                    STATE.gps.accuracy_m = fix["accuracy_m"]
-                if "hdop" in fix:
-                    STATE.gps.hdop = fix["hdop"]
-                if "sat_count" in fix:
-                    STATE.gps.sat_count = fix["sat_count"]
+                # Any recognised sentence counts as "NMEA flowing" — even
+                # the no-fix variants. The operator terminal uses this to
+                # distinguish "antenna powered, sats not yet acquired"
+                # from "no data on the wire at all".
+                STATE.gps.nmea_frames += 1
+                STATE.gps.nmea_last_ts = time.time()
+
+                kind = msg.get("kind")
+                if kind == "tracked":
+                    # GSV total — sats *visible*, may be > sats used in fix.
+                    STATE.gps.sats_tracked = msg.get("sats_tracked", 0)
+                    continue
+                if kind == "nofix":
+                    # GGA/RMC with no valid fix yet. Don't clear an existing
+                    # fix; just remember sats_used (capped <= tracked).
+                    used = msg.get("sats_used", 0)
+                    if used > STATE.gps.sats_tracked:
+                        STATE.gps.sats_tracked = used
+                    continue
+                if kind != "fix":
+                    continue
+                if "speed_mps" in msg:
+                    last_speed = msg["speed_mps"]
+                STATE.gps.lat = msg["lat"]
+                STATE.gps.lon = msg["lon"]
+                if "accuracy_m" in msg:
+                    STATE.gps.accuracy_m = msg["accuracy_m"]
+                if "hdop" in msg:
+                    STATE.gps.hdop = msg["hdop"]
+                if "sat_count" in msg:
+                    STATE.gps.sat_count = msg["sat_count"]
                 if last_speed is not None:
                     STATE.gps.speed_mps = last_speed
                 STATE.gps.ts = time.time()
