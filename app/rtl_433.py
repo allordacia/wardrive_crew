@@ -97,6 +97,12 @@ async def rtl_433_loop() -> None:
 
     STATE.rtl433_cmd = " ".join(args)
 
+    # Grace period (seconds) we wait after rtl_power was last active
+    # before claiming the dongle, and vice-versa. The kernel USB endpoint
+    # takes a beat to detach when one process exits.
+    DONGLE_GRACE_S = 3.0
+    import time as _t
+
     while True:
         if not _ft.is_enabled("rtl433"):
             STATE.rtl433_active = False
@@ -106,6 +112,14 @@ async def rtl_433_loop() -> None:
             log.warning("rtl_433: binary not in PATH; backing off")
             STATE.rtl433_active = False
             await asyncio.sleep(30)
+            continue
+        # Dongle-grace handshake: don't try to spawn if rtl_power was
+        # holding the dongle within the last few seconds. Avoids the
+        # "device is unavailable / resource is busy" race when the
+        # operator toggles sdr -> rtl_433 from CONFIG.
+        if STATE.sdr_active or (_t.time() - STATE.sdr_last_active_ts) < DONGLE_GRACE_S:
+            STATE.rtl433_active = False
+            await asyncio.sleep(0.5)
             continue
 
         log.info("rtl_433: starting %s", " ".join(args))
@@ -123,6 +137,7 @@ async def rtl_433_loop() -> None:
             continue
 
         STATE.rtl433_active = True
+        STATE.rtl433_last_active_ts = _t.time()
         try:
             assert proc.stdout is not None
             while True:
@@ -130,6 +145,7 @@ async def rtl_433_loop() -> None:
                 if not _ft.is_enabled("rtl433"):
                     log.info("rtl_433: flag off, stopping subprocess")
                     break
+                STATE.rtl433_last_active_ts = _t.time()
                 try:
                     line = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
                 except asyncio.TimeoutError:

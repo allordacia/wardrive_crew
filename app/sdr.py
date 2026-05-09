@@ -96,6 +96,10 @@ async def sdr_loop() -> None:
     bands_list = list(bands)
     STATE.sdr_bands_count = len(bands_list)
 
+    # Grace period (seconds) we wait after rtl_433 was last active
+    # before claiming the dongle. Symmetric with rtl_433_loop's check.
+    DONGLE_GRACE_S = 3.0
+
     import time as _t
     while True:
         if not _ft.is_enabled("sdr"):
@@ -107,14 +111,23 @@ async def sdr_loop() -> None:
             STATE.sdr_active = False
             await asyncio.sleep(30)
             continue
+        # Dongle-grace handshake: don't sweep if rtl_433 was holding
+        # the dongle within the last few seconds. The kernel USB
+        # endpoint takes a beat to detach when rtl_433 exits.
+        if STATE.rtl433_active or (_t.time() - STATE.rtl433_last_active_ts) < DONGLE_GRACE_S:
+            STATE.sdr_active = False
+            await asyncio.sleep(0.5)
+            continue
 
         STATE.sdr_active = True
+        STATE.sdr_last_active_ts = _t.time()
         log.info("sdr: sweep bands=%s every %ds, threshold=%.1f dBm",
                  bands_list, interval, threshold)
         total = 0
         for band in bands_list:
             if not _ft.is_enabled("sdr"):
                 break
+            STATE.sdr_last_active_ts = _t.time()
             n = await _sweep_band(band, threshold)
             total += n
             STATE.sdr_last_band = band
