@@ -25,6 +25,7 @@ import os
 import time
 
 from .state import STATE
+from . import bt_classify
 
 
 log = logging.getLogger("wardrive.bt")
@@ -51,11 +52,16 @@ def _detection_callback(device, adv_data) -> None:
             cid = next(iter(mdata.keys()))
             mfg = f"0x{cid:04x}"
 
+        # Tracker / beacon classification (airtag, tile, smarttag, ibeacon,
+        # eddystone, ...). Empty string if nothing recognisable.
+        tag = bt_classify.classify(adv_data)
+
         STATE.add_bt_device(
             mac=device.address,
             name=name or "",
             rssi=int(rssi) if rssi is not None else None,
             manufacturer=mfg,
+            tracker_type=tag,
         )
     except Exception:  # noqa: BLE001
         # never crash the scanner on a single advertisement

@@ -369,7 +369,52 @@ html, body {
   text-shadow: 0 0 6px rgba(255, 80, 80, 0.30);
 }
 .live-nets tr.row-tg td.c-bssid { color: rgba(255, 100, 100, 0.75); }
+.live-nets tr.row-tracker td {
+  background: rgba(255, 180, 80, 0.04);
+  text-shadow: 0 0 6px rgba(255, 180, 80, 0.20);
+}
 .live-nets tr.fresh td { animation: row-flash 1.4s ease-out; }
+
+/* Tracker / beacon classification chip in the BT row's NAME column. */
+.bt-tag {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border: 1px solid var(--frame-2);
+  border-radius: 2px;
+  color: var(--ink-dim);
+  background: rgba(80, 200, 120, 0.08);
+}
+.bt-tag-airtag,
+.bt-tag-tile,
+.bt-tag-smarttag,
+.bt-tag-chipolo {
+  color: #1a0606;
+  background: var(--amber);
+  border-color: var(--amber);
+  text-shadow: none;
+}
+.bt-tag-ibeacon,
+.bt-tag-eddystone {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(90, 216, 255, 0.10);
+}
+.bt-tag-apple,
+.bt-tag-apple-nearby,
+.bt-tag-airpods,
+.bt-tag-samsung,
+.bt-tag-microsoft,
+.bt-tag-google,
+.bt-tag-garmin,
+.bt-tag-broadcom {
+  color: var(--ink);
+  border-color: var(--frame-2);
+  background: rgba(80, 200, 120, 0.10);
+}
 @keyframes row-flash {
   0%   { background: rgba(132, 255, 170, 0.20); }
   100% { background: transparent; }
