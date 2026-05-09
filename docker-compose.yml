@@ -19,6 +19,11 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+      # SYS_TIME: lets `hwclock -s` settimeofday() if the user actually
+      # wants the container to write the wallclock from the AIO RTC.
+      # The default rtc_loop only reads the chip, so this is optional —
+      # included so it's there if needed.
+      - SYS_TIME
     environment:
       # Wireless adapter on the host. Defaults to wlan1 (AIO board on a
       # uConsole, so the host's built-in wifi on wlan0 stays available for
