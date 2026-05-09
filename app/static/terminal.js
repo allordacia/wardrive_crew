@@ -19,6 +19,11 @@
   const W = 640;
   const H = 360;
 
+  // Mirror of app/bt_classify.TRACKER_TAGS — tags that mean "this is a
+  // tracker, not just a vendor hint". Drives row-tracker styling and
+  // the // TRACKERS HUD line.
+  const TRACKER_TAGS = new Set(["airtag", "tile", "smarttag", "chipolo"]);
+
   const PHOS    = "#b6ffd0";
   const PHOS_DM = "#5fa67a";
   const PHOS_FT = "#244430";
@@ -363,6 +368,18 @@
     ctx.fillStyle = PHOS_DM;
     ctx.fillText(`// BANDS ${segs.join(" ")}`, 220, H - 14);
 
+    // // TRACKERS — count of in-range tracker categories (airtag/tile/...).
+    // Only the visible-now slice counts so the line stays accurate as
+    // adverts fade out of range, not the historical total.
+    const visTrackers = (sim.bt_visible || []).filter(d => TRACKER_TAGS.has(d.tracker_type));
+    if (visTrackers.length > 0) {
+      const counts = {};
+      for (const d of visTrackers) counts[d.tracker_type] = (counts[d.tracker_type] || 0) + 1;
+      const segs2 = Object.entries(counts).map(([t, n]) => `${t.toUpperCase()}:${n}`);
+      ctx.fillStyle = AMBER;
+      ctx.fillText(`// TRACKERS ${segs2.join(" ")}`, 16, H - 28);
+    }
+
     ctx.fillStyle = sim.lora_active ? MAGENTA : PHOS_FT;
     ctx.fillText(`MESH=${(sim.fleet || []).length}`, W - 86, H - 14);
   }
@@ -651,12 +668,18 @@
         : `${Math.round(ageS / 3600)}h`;
       const macShort = (d.mac || "").toUpperCase();
       const nameTxt = d.name || "(anon)";
+      // Tracker / beacon classifier tag — render as a coloured chip next
+      // to the manufacturer column. Trackers (airtag/tile/smarttag) get
+      // an extra row class so the whole line jumps out.
+      const tag = d.tracker_type || "";
+      const tagChip = tag ? `<span class="bt-tag bt-tag-${tag}">${escapeHtml(tag.toUpperCase())}</span>` : "";
+      if (TRACKER_TAGS.has(tag)) tr.classList.add("row-tracker");
       tr.innerHTML =
         `<td class="c-act">` +
           `<button class="flag-btn" data-kind="wl" data-on="${d.whitelisted ? 1 : 0}" title="whitelist">[*]</button>` +
           `<button class="flag-btn" data-kind="tg" data-on="${d.targeted    ? 1 : 0}" title="add to target list">[!]</button>` +
         `</td>` +
-        `<td class="c-ssid">${escapeHtml(nameTxt)}</td>` +
+        `<td class="c-ssid">${tagChip}${escapeHtml(nameTxt)}</td>` +
         `<td class="c-bssid">${escapeHtml(macShort)}</td>` +
         `<td class="c-sig">${rssiTxt}</td>` +
         `<td class="c-enc">${escapeHtml(d.manufacturer || "-")}</td>` +

@@ -42,7 +42,8 @@ def _connect() -> sqlite3.Connection:
             lat REAL,
             lon REAL,
             whitelisted INTEGER NOT NULL DEFAULT 0,
-            targeted INTEGER NOT NULL DEFAULT 0
+            targeted INTEGER NOT NULL DEFAULT 0,
+            tracker_type TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
@@ -64,6 +65,9 @@ def _connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE networks ADD COLUMN targeted INTEGER NOT NULL DEFAULT 0")
     if "band" not in cols:
         conn.execute("ALTER TABLE networks ADD COLUMN band TEXT NOT NULL DEFAULT ''")
+    bt_cols = {row[1] for row in conn.execute("PRAGMA table_info(bt_devices)").fetchall()}
+    if "tracker_type" not in bt_cols:
+        conn.execute("ALTER TABLE bt_devices ADD COLUMN tracker_type TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
 
@@ -204,8 +208,16 @@ class State:
         name: str,
         rssi: Optional[int],
         manufacturer: str,
+        tracker_type: str = "",
     ) -> bool:
-        """Insert/update a BLE device. Returns True if it was new."""
+        """Insert/update a BLE device. Returns True if it was new.
+
+        ``tracker_type`` is the bt_classify tag string ("airtag", "tile",
+        "ibeacon", "eddystone", "smarttag", ...) or "" for unrecognised
+        adverts. Only overwrites the stored value when we actually
+        recognised something this advertisement, so an anonymous follow-up
+        advert from a known AirTag doesn't blank the tag.
+        """
         mac = (mac or "").lower()
         if not mac:
             return False
@@ -217,21 +229,26 @@ class State:
         if new:
             self.db.execute(
                 "INSERT INTO bt_devices(mac, name, rssi, manufacturer, "
-                "first_seen, last_seen, lat, lon) VALUES (?,?,?,?,?,?,?,?)",
-                (mac, name, rssi, manufacturer, now, now, lat, lon),
+                "first_seen, last_seen, lat, lon, tracker_type) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (mac, name, rssi, manufacturer, now, now, lat, lon, tracker_type or ""),
             )
         else:
             # Only overwrite name/manufacturer when we actually heard something
-            # informative — many BLE adverts come anonymous.
+            # informative — many BLE adverts come anonymous. Same trick for
+            # tracker_type so we keep the most informative classification.
             self.db.execute(
                 "UPDATE bt_devices SET "
                 "name=COALESCE(NULLIF(?, ''), name), "
                 "rssi=COALESCE(?, rssi), "
                 "manufacturer=COALESCE(NULLIF(?, ''), manufacturer), "
+                "tracker_type=CASE WHEN ?='' THEN tracker_type ELSE ? END, "
                 "last_seen=?, "
                 "lat=COALESCE(?, lat), lon=COALESCE(?, lon) "
                 "WHERE mac=?",
-                (name, rssi, manufacturer, now, lat, lon, mac),
+                (name, rssi, manufacturer,
+                 tracker_type or "", tracker_type or "",
+                 now, lat, lon, mac),
             )
         self.db.commit()
         return new
@@ -258,7 +275,7 @@ class State:
         cutoff = time.time() - max_age_s
         cur = self.db.execute(
             "SELECT mac, name, rssi, manufacturer, last_seen, "
-            "whitelisted, targeted "
+            "whitelisted, targeted, tracker_type "
             "FROM bt_devices WHERE last_seen >= ? "
             "ORDER BY COALESCE(rssi, -999) DESC, last_seen DESC LIMIT ?",
             (cutoff, max(1, min(limit, 200))),
@@ -269,6 +286,7 @@ class State:
                 "mac": r[0], "name": r[1] or "", "rssi": r[2],
                 "manufacturer": r[3] or "", "last_seen": r[4],
                 "whitelisted": bool(r[5]), "targeted": bool(r[6]),
+                "tracker_type": r[7] or "",
             })
         return out
 
@@ -279,6 +297,16 @@ class State:
     def bt_targets_total(self) -> int:
         cur = self.db.execute("SELECT COUNT(*) FROM bt_devices WHERE targeted=1")
         return int(cur.fetchone()[0])
+
+    def bt_trackers_seen(self) -> dict:
+        """Counts of recognised tracker categories ever heard. Drives the
+        `// TRACKERS` line on the operator scope so the user can see at a
+        glance whether AirTags / Tiles are nearby."""
+        cur = self.db.execute(
+            "SELECT tracker_type, COUNT(*) FROM bt_devices "
+            "WHERE tracker_type != '' GROUP BY tracker_type"
+        )
+        return {row[0]: int(row[1]) for row in cur.fetchall()}
 
     def bt_visible_count(self, max_age_s: float = 30.0) -> int:
         cutoff = time.time() - max_age_s

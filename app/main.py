@@ -500,6 +500,7 @@ def _snapshot() -> dict:
         "bt_devices_total": STATE.bt_devices_total(),
         "bt_targets_total": STATE.bt_targets_total(),
         "bt_visible": STATE.visible_bt_devices(limit=24),
+        "bt_trackers": STATE.bt_trackers_seen(),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,
