@@ -62,6 +62,7 @@
   };
   const btTbody = document.getElementById("bt-tbody");
   const rfTbody = document.getElementById("rf-tbody");
+  const clientsTbody = document.getElementById("clients-tbody");
 
   // ----- snapshot state from /ws -------------------------------------------
   const sim = {
@@ -97,6 +98,10 @@
     rf_visible: [],
     rf_devices_total: 0,
     rf_targets_total: 0,
+    wifi_clients_active: false,
+    wifi_clients_visible: [],
+    wifi_clients_total: 0,
+    wifi_client_targets_total: 0,
     snapshot: null,
   };
   let prev = JSON.parse(JSON.stringify(sim));
@@ -544,11 +549,15 @@
 
     scopeMeta.textContent = `${BLIPS.length} blip${BLIPS.length === 1 ? "" : "s"} :: sweep ${tickHz().toFixed(1)}hz`;
     if (liveMeta) {
-      const vNets = (sim.visible_nets || []).length;
-      const vBt   = (sim.bt_visible || []).length;
-      const vRf   = (sim.rf_visible || []).length;
+      const vNets    = (sim.visible_nets || []).length;
+      const vClients = (sim.wifi_clients_visible || []).length;
+      const vBt      = (sim.bt_visible || []).length;
+      const vRf      = (sim.rf_visible || []).length;
       liveMeta.textContent =
-        `nets ${vNets}/${sim.targets_total || 0}t :: bt ${vBt}/${sim.bt_targets_total || 0}t :: rf ${vRf}/${sim.rf_targets_total || 0}t`;
+        `nets ${vNets}/${sim.targets_total || 0}t :: ` +
+        `sta ${vClients}/${sim.wifi_client_targets_total || 0}t :: ` +
+        `bt ${vBt}/${sim.bt_targets_total || 0}t :: ` +
+        `rf ${vRf}/${sim.rf_targets_total || 0}t`;
     }
   }
 
@@ -776,6 +785,97 @@
   }
 
   // ============================================================
+  //  WIFI.CLIENTS table — STA frames captured by the tshark sidecar.
+  //  Only populates when monitor mode is on; empty placeholder
+  //  otherwise tells the operator how to enable it.
+  // ============================================================
+  const clientsSeen = new Set();
+  function updateWifiClients() {
+    if (!clientsTbody) return;
+    const devs = sim.wifi_clients_visible || [];
+    if (devs.length === 0) {
+      const placeholder = sim.monitor_on
+        ? (sim.wifi_clients_active
+            ? "// listening, no STAs heard yet"
+            : "// monitor on, sidecar starting...")
+        : "// monitor mode off (press [F1] MONITOR)";
+      clientsTbody.innerHTML = `<tr class="empty"><td colspan="7">${placeholder}</td></tr>`;
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    const nowSec = Date.now() / 1000;
+    for (const c of devs) {
+      const tr = document.createElement("tr");
+      tr.dataset.cmac = c.mac;
+      if (c.whitelisted) tr.classList.add("row-wl");
+      if (c.targeted)    tr.classList.add("row-tg");
+      if (!clientsSeen.has(c.mac)) { tr.classList.add("fresh"); clientsSeen.add(c.mac); }
+      const rssiTxt = (c.last_signal != null) ? `${c.last_signal} dBm` : "--";
+      const ageS = c.last_seen ? Math.max(0, nowSec - c.last_seen) : null;
+      const ageTxt = ageS == null ? "--"
+        : ageS < 60 ? `${Math.round(ageS)}s`
+        : ageS < 3600 ? `${Math.round(ageS / 60)}m`
+        : `${Math.round(ageS / 3600)}h`;
+      const macShort = (c.mac || "").toUpperCase();
+      const probed = (c.probed_ssids || []).filter(Boolean);
+      // Show up to 3 probed SSIDs inline + a "+N more" tail.
+      const inline = probed.slice(0, 3).map(escapeHtml).join(", ");
+      const more = probed.length > 3 ? ` <span style="opacity:.6">+${probed.length-3}</span>` : "";
+      const probedTxt = probed.length === 0 ? '<span style="opacity:.55">(broadcast)</span>'
+        : `${inline}${more}`;
+      const randChip = c.is_random
+        ? '<span class="bt-tag" style="background:rgba(80,200,120,0.10); color:var(--ink-dim)">RAND</span>'
+        : '<span style="opacity:.55">--</span>';
+      tr.innerHTML =
+        `<td class="c-act">` +
+          `<button class="flag-btn" data-kind="wl" data-on="${c.whitelisted ? 1 : 0}" title="whitelist">[*]</button>` +
+          `<button class="flag-btn" data-kind="tg" data-on="${c.targeted    ? 1 : 0}" title="add to target list">[!]</button>` +
+        `</td>` +
+        `<td class="c-ssid">${probedTxt}</td>` +
+        `<td class="c-bssid">${escapeHtml(macShort)}</td>` +
+        `<td class="c-ch">${randChip}</td>` +
+        `<td class="c-sig">${rssiTxt}</td>` +
+        `<td class="c-enc"><span style="opacity:.7">×${c.probe_count|0}</span></td>` +
+        `<td class="c-age">${ageTxt}</td>`;
+      frag.appendChild(tr);
+    }
+    clientsTbody.replaceChildren(frag);
+  }
+
+  if (clientsTbody) {
+    clientsTbody.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest(".flag-btn");
+      if (!btn) return;
+      const tr = btn.closest("tr");
+      const mac = tr && tr.dataset.cmac;
+      if (!mac) return;
+      const kind = btn.dataset.kind;
+      const next = btn.dataset.on === "1" ? 0 : 1;
+      const prevOn = btn.dataset.on;
+      btn.dataset.on = String(next);
+      if (kind === "wl") tr.classList.toggle("row-wl", next === 1);
+      if (kind === "tg") tr.classList.toggle("row-tg", next === 1);
+      try {
+        const body = kind === "wl" ? { whitelisted: next === 1 } : { targeted: next === 1 };
+        const r = await fetch(`/api/clients/${encodeURIComponent(mac)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+        const verb = next === 1 ? "+" : "-";
+        const tag = kind === "wl" ? "whitelist" : "target";
+        pushLog(kind === "tg" ? "tgt" : "sys", `${verb} client ${tag}  ${mac}`);
+      } catch (e) {
+        btn.dataset.on = prevOn;
+        if (kind === "wl") tr.classList.toggle("row-wl", prevOn === "1");
+        if (kind === "tg") tr.classList.toggle("row-tg", prevOn === "1");
+        pushLog("warn", `! flag toggle failed: ${e}`);
+      }
+    });
+  }
+
+  // ============================================================
   //  Tab switching for the live panel
   // ============================================================
   document.querySelectorAll(".panel-tabs .tab").forEach(tab => {
@@ -945,6 +1045,10 @@
         sim.rf_visible = Array.isArray(s.rf_visible) ? s.rf_visible : [];
         sim.rf_devices_total = s.rf_devices_total || 0;
         sim.rf_targets_total = s.rf_targets_total || 0;
+        sim.wifi_clients_active = !!s.wifi_clients_active;
+        sim.wifi_clients_visible = Array.isArray(s.wifi_clients_visible) ? s.wifi_clients_visible : [];
+        sim.wifi_clients_total = s.wifi_clients_total || 0;
+        sim.wifi_client_targets_total = s.wifi_client_targets_total || 0;
         sim.snapshot = s;
 
         reactToSnapshot(s);
@@ -955,6 +1059,7 @@
         updateLiveNets();
         updateBtDevices();
         updateRfDevices();
+        updateWifiClients();
       } catch (e) { /* ignore */ }
     };
     _ws.onclose = () => {

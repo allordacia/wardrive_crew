@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wpasupplicant \
         tcpdump \
         wireshark-common \
+        tshark \
         aircrack-ng \
         openssl \
         ca-certificates \
