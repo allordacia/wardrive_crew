@@ -32,9 +32,14 @@ services:
       WARDRIVE_GPS_BAUD: "${WARDRIVE_GPS_BAUD:-9600}"
       # Pull hardware time from the AIO RTC at startup.
       WARDRIVE_RTC_SYNC: "${WARDRIVE_RTC_SYNC:-1}"
-      # Run the RTL-SDR sweep loop. Requires the RTL-SDR rail to be powered
-      # on (aio_ctl sdr on) and rtl_power present in the container.
-      WARDRIVE_SDR_ENABLED: "${WARDRIVE_SDR_ENABLED:-1}"
+      # rtl_433 decodes consumer RF devices (weather stations, tire
+      # sensors, doorbells, etc.). Mutually exclusive with the legacy
+      # rtl_power peak counter — when both are 1, rtl_433 wins.
+      WARDRIVE_RTL433_ENABLED: "${WARDRIVE_RTL433_ENABLED:-1}"
+      # Legacy RTL-SDR `rtl_power` band sweep. Off by default now that
+      # rtl_433 is the primary SDR consumer; flip to 1 if you actually
+      # want bin-above-threshold counts instead of device decodes.
+      WARDRIVE_SDR_ENABLED: "${WARDRIVE_SDR_ENABLED:-0}"
       # Passive BLE scan via the CM5 / AIO Bluetooth radio. Requires
       # bluetoothd running on the host and rfkill unblocked.
       WARDRIVE_BT_ENABLED: "${WARDRIVE_BT_ENABLED:-1}"

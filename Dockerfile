@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         util-linux \
         rtl-sdr \
         librtlsdr0 \
+        rtl-433 \
         bluez \
         bluez-tools \
         dbus \

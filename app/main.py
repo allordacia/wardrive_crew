@@ -17,6 +17,7 @@ from . import scanner
 from . import gps_serial
 from . import rtc as rtc_mod
 from . import sdr as sdr_mod
+from . import rtl_433 as rtl433_mod
 from . import lora as lora_mod
 from . import bluetooth as bt_mod
 from .state import STATE
@@ -152,10 +153,18 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(scanner.scan_loop(), name="scan_loop"),
         asyncio.create_task(scanner.decay_loop(), name="decay_loop"),
         asyncio.create_task(gps_serial.gps_serial_loop(), name="gps_serial"),
-        asyncio.create_task(sdr_mod.sdr_loop(), name="sdr_loop"),
         asyncio.create_task(lora_mod.lora_loop(), name="lora_loop"),
         asyncio.create_task(bt_mod.bt_loop(), name="bt_loop"),
     ]
+    # rtl_433 and rtl_power both need the SDR dongle and can't share it.
+    # When both env flags are 1, prefer rtl_433 — it gives device decodes
+    # rather than just bin-above-threshold counts.
+    if os.environ.get("WARDRIVE_RTL433_ENABLED", "0") == "1":
+        if os.environ.get("WARDRIVE_SDR_ENABLED", "0") == "1":
+            log.info("rtl_433 + rtl_power both enabled; rtl_433 wins (dongle is shared)")
+        tasks.append(asyncio.create_task(rtl433_mod.rtl_433_loop(), name="rtl_433"))
+    else:
+        tasks.append(asyncio.create_task(sdr_mod.sdr_loop(), name="sdr_loop"))
     if os.environ.get("WARDRIVE_AUTO_MONITOR", "0") == "1":
         try:
             await scanner.enable_monitor()
@@ -374,6 +383,56 @@ def set_bt_flags(mac: str, body: BtFlagsIn) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# RF devices (rtl_433 decodes)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/rf/devices")
+def rf_devices(limit: int = 500) -> JSONResponse:
+    cur = STATE.db.execute(
+        "SELECT device_key, model, dev_id, channel, freq_mhz, rssi, "
+        "first_seen, last_seen, count, summary, lat, lon, "
+        "whitelisted, targeted FROM rf_devices "
+        "ORDER BY last_seen DESC LIMIT ?",
+        (max(1, min(limit, 5000)),),
+    )
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    return JSONResponse(rows)
+
+
+class RfFlagsIn(BaseModel):
+    whitelisted: bool | None = None
+    targeted: bool | None = None
+
+
+@app.put("/api/rf/{key:path}")
+def set_rf_flags(key: str, body: RfFlagsIn) -> dict:
+    key = (key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key required")
+    cur = STATE.db.execute("SELECT 1 FROM rf_devices WHERE device_key=?", (key,))
+    if cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail="rf device not found")
+    if body.whitelisted is not None:
+        STATE.set_rf_whitelist(key, bool(body.whitelisted))
+    if body.targeted is not None:
+        STATE.set_rf_target(key, bool(body.targeted))
+    cur = STATE.db.execute(
+        "SELECT whitelisted, targeted FROM rf_devices WHERE device_key=?", (key,)
+    )
+    row = cur.fetchone()
+    return {"ok": True, "key": key, "whitelisted": bool(row[0]), "targeted": bool(row[1])}
+
+
+@app.get("/api/rf/{key:path}/detail")
+def rf_detail(key: str) -> dict:
+    detail = STATE.rf_detail((key or "").strip())
+    if detail is None:
+        raise HTTPException(status_code=404, detail="rf device not found")
+    return detail
+
+
 class WhitelistIn(BaseModel):
     bssid: str | None = None
     ssid: str | None = None
@@ -501,6 +560,17 @@ def _snapshot() -> dict:
         "bt_targets_total": STATE.bt_targets_total(),
         "bt_visible": STATE.visible_bt_devices(limit=24),
         "bt_trackers": STATE.bt_trackers_seen(),
+        "rtl433": {
+            "active": STATE.rtl433_active,
+            "cmd": STATE.rtl433_cmd,
+            "last_age_s": _age(STATE.rtl433_last_ts),
+            "devices_total": STATE.rf_devices_total(),
+            "targets_total": STATE.rf_targets_total(),
+        },
+        "rtl433_active": STATE.rtl433_active,
+        "rf_devices_total": STATE.rf_devices_total(),
+        "rf_targets_total": STATE.rf_targets_total(),
+        "rf_visible": STATE.visible_rf_devices(limit=24),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,
