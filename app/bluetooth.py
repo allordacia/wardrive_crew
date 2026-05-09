@@ -69,25 +69,33 @@ def _detection_callback(device, adv_data) -> None:
 
 
 async def bt_loop() -> None:
-    """Long-running BLE scan loop. No-op when WARDRIVE_BT_ENABLED != 1."""
-    if os.environ.get("WARDRIVE_BT_ENABLED", "0") != "1":
-        log.info("bt: disabled (set WARDRIVE_BT_ENABLED=1 to enable)")
-        return
-
-    try:
-        from bleak import BleakScanner  # type: ignore
-    except ImportError as e:
-        log.warning("bt: bleak not installed (%s); BT scanning disabled", e)
-        return
+    """Supervisor loop. Reads the runtime feature flag each iteration so
+    the operator can flip BT scanning on/off from the CONFIG modal mid-
+    session without restarting the container."""
+    from . import features as _ft  # local import: avoids circular at module load
 
     interval = int(os.environ.get("WARDRIVE_BT_INTERVAL", "8"))
     adapter = os.environ.get("WARDRIVE_BT_ADAPTER", "").strip() or None
+    BleakScanner = None  # lazy
 
-    STATE.bt_active = True
     STATE.bt_adapter = adapter or "default"
-    log.info("bt: enabled, adapter=%s, scan_window=%ds", adapter or "auto", interval)
+    log.info("bt: supervisor up; flag-controlled scan window=%ds", interval)
 
     while True:
+        if not _ft.is_enabled("bt"):
+            STATE.bt_active = False
+            await asyncio.sleep(1.0)
+            continue
+        if BleakScanner is None:
+            try:
+                from bleak import BleakScanner as _BS  # type: ignore
+                BleakScanner = _BS
+            except ImportError as e:
+                log.warning("bt: bleak not installed (%s); disabling", e)
+                STATE.bt_active = False
+                await asyncio.sleep(30)
+                continue
+        STATE.bt_active = True
         seen_at_start = STATE.bt_devices_total()
         try:
             scanner = BleakScanner(
@@ -96,7 +104,14 @@ async def bt_loop() -> None:
             )
             STATE.bt_last_scan_ts = time.time()
             await scanner.start()
-            await asyncio.sleep(interval)
+            # Sleep in slices so a feature-flag flip kills the scan
+            # within ~1s instead of waiting out the full interval.
+            slept = 0.0
+            while slept < interval:
+                await asyncio.sleep(min(1.0, interval - slept))
+                slept += 1.0
+                if not _ft.is_enabled("bt"):
+                    break
             await scanner.stop()
         except asyncio.CancelledError:
             log.info("bt: scan cancelled")
@@ -107,11 +122,9 @@ async def bt_loop() -> None:
             STATE.status_msg = f"bt: scan failed: {e}"
             log.warning("bt: scan failed: %s; retrying in %ds", e, interval * 2)
             await asyncio.sleep(interval * 2)
-            STATE.bt_active = True
             continue
 
         seen_at_end = STATE.bt_devices_total()
         STATE.bt_last_scan_new = max(0, seen_at_end - seen_at_start)
         STATE.bt_last_scan_seen = STATE.bt_visible_count(max_age_s=interval * 3.0)
-        # tiny breath between cycles so the asyncio loop stays responsive
         await asyncio.sleep(0.2)

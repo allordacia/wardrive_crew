@@ -110,10 +110,15 @@ async def _run_tshark(iface: str) -> None:
     err_task = asyncio.create_task(_read_pipe(proc.stderr))
     try:
         assert proc.stdout is not None
+        from . import features as _ft  # local: avoids circular
         while True:
-            # Stop tshark if the operator turned monitor off.
+            # Stop tshark if the operator turned monitor off OR flipped
+            # the runtime feature flag for STA capture.
             if not STATE.monitor_on:
                 log.info("clients: monitor mode off; stopping tshark")
+                break
+            if not _ft.is_enabled("clients"):
+                log.info("clients: feature flag off; stopping tshark")
                 break
             try:
                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
@@ -181,12 +186,19 @@ def _ingest_line(line: str) -> None:
 
 
 async def wifi_clients_loop() -> None:
-    """Long-running supervisor: when monitor mode is on, run tshark
-    against the monitor iface; when monitor flips off, stay idle."""
-    if os.environ.get("WARDRIVE_CLIENTS_ENABLED", "1") != "1":
-        log.info("clients: disabled via WARDRIVE_CLIENTS_ENABLED")
-        return
+    """Long-running supervisor. tshark only runs when:
+        - the runtime feature flag for "clients" is enabled (CONFIG
+          modal can flip this off mid-session), AND
+        - monitor mode is on, AND
+        - we have a monitor iface name to bind to.
+    When any condition flips, the running tshark is stopped cleanly
+    and we go idle until they're all true again."""
+    from . import features as _ft  # local: avoids circular at module load
     while True:
+        if not _ft.is_enabled("clients"):
+            STATE.wifi_clients_active = False
+            await asyncio.sleep(1.0)
+            continue
         if not STATE.monitor_on:
             await asyncio.sleep(2.0)
             continue

@@ -80,11 +80,11 @@ async def _sweep_band(band: str, threshold_dbm: float) -> int:
 
 
 async def sdr_loop() -> None:
-    if os.environ.get("WARDRIVE_SDR_ENABLED", "0") != "1":
-        return
-    if not shutil.which("rtl_power"):
-        log.warning("sdr: rtl_power not installed; loop disabled")
-        return
+    """Supervisor loop. Reads the runtime feature flag each iteration so
+    the operator can flip rtl_power on/off from CONFIG. Mutually
+    exclusive with rtl_433 — `features.is_enabled("sdr")` already
+    returns False whenever rtl_433 is on."""
+    from . import features as _ft  # local: avoids circular at import
 
     bands_env = os.environ.get("WARDRIVE_SDR_BANDS", "").strip()
     bands: Iterable[str] = (
@@ -93,16 +93,28 @@ async def sdr_loop() -> None:
     )
     interval = int(os.environ.get("WARDRIVE_SDR_INTERVAL", "60"))
     threshold = float(os.environ.get("WARDRIVE_SDR_THRESHOLD", "-40"))
-
     bands_list = list(bands)
-    STATE.sdr_active = True
     STATE.sdr_bands_count = len(bands_list)
-    log.info("sdr: enabled, bands=%s every %ds, threshold=%.1f dBm",
-             bands_list, interval, threshold)
+
     import time as _t
     while True:
+        if not _ft.is_enabled("sdr"):
+            STATE.sdr_active = False
+            await asyncio.sleep(1.0)
+            continue
+        if not shutil.which("rtl_power"):
+            log.warning("sdr: rtl_power not installed; backing off")
+            STATE.sdr_active = False
+            await asyncio.sleep(30)
+            continue
+
+        STATE.sdr_active = True
+        log.info("sdr: sweep bands=%s every %ds, threshold=%.1f dBm",
+                 bands_list, interval, threshold)
         total = 0
         for band in bands_list:
+            if not _ft.is_enabled("sdr"):
+                break
             n = await _sweep_band(band, threshold)
             total += n
             STATE.sdr_last_band = band
@@ -113,4 +125,11 @@ async def sdr_loop() -> None:
         if total > 0:
             STATE.add_rf_signals(total)
             STATE.status_msg = f"sdr: {total} peaks across {len(bands_list)} bands"
-        await asyncio.sleep(interval)
+        # Sleep in 1-second slices so a feature-flag flip kills the
+        # quiet period instead of waiting out the full interval.
+        slept = 0.0
+        while slept < interval:
+            await asyncio.sleep(min(1.0, interval - slept))
+            slept += 1.0
+            if not _ft.is_enabled("sdr"):
+                break

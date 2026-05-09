@@ -78,13 +78,11 @@ def _summarise(rec: dict) -> str:
 
 
 async def rtl_433_loop() -> None:
-    """Long-running rtl_433 reader. No-op when disabled."""
-    if os.environ.get("WARDRIVE_RTL433_ENABLED", "0") != "1":
-        log.info("rtl_433: disabled (set WARDRIVE_RTL433_ENABLED=1 to enable)")
-        return
-    if not shutil.which("rtl_433"):
-        log.warning("rtl_433: binary not in PATH; loop disabled")
-        return
+    """Supervisor loop. Reads the runtime feature flag each iteration so
+    the operator can toggle rtl_433 from the CONFIG modal mid-session.
+    The subprocess is killed when the flag flips off and respawned when
+    it flips back on."""
+    from . import features as _ft  # local: avoids circular at import
 
     freq    = os.environ.get("WARDRIVE_RTL433_FREQ", "").strip()
     gain    = os.environ.get("WARDRIVE_RTL433_GAIN", "").strip()
@@ -97,11 +95,20 @@ async def rtl_433_loop() -> None:
     if gain:
         args += ["-g", gain]
 
-    STATE.rtl433_active = True
     STATE.rtl433_cmd = " ".join(args)
-    log.info("rtl_433: starting %s", " ".join(args))
 
     while True:
+        if not _ft.is_enabled("rtl433"):
+            STATE.rtl433_active = False
+            await asyncio.sleep(1.0)
+            continue
+        if not shutil.which("rtl_433"):
+            log.warning("rtl_433: binary not in PATH; backing off")
+            STATE.rtl433_active = False
+            await asyncio.sleep(30)
+            continue
+
+        log.info("rtl_433: starting %s", " ".join(args))
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
@@ -119,7 +126,14 @@ async def rtl_433_loop() -> None:
         try:
             assert proc.stdout is not None
             while True:
-                line = await proc.stdout.readline()
+                # If the flag flipped off, kill the process and bail.
+                if not _ft.is_enabled("rtl433"):
+                    log.info("rtl_433: flag off, stopping subprocess")
+                    break
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
                 if not line:
                     break
                 line_s = line.decode(errors="replace").strip()
@@ -141,11 +155,19 @@ async def rtl_433_loop() -> None:
             raise
         except Exception:  # noqa: BLE001
             log.exception("rtl_433: read loop error")
+        finally:
+            STATE.rtl433_active = False
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:  # noqa: BLE001
+                    pass
 
-        STATE.rtl433_active = False
-        rc = await proc.wait()
-        log.warning("rtl_433: exited rc=%s; restarting in 5s", rc)
-        await asyncio.sleep(5)
+        await asyncio.sleep(1.0)
 
 
 def _ingest(rec: dict, raw_line: str) -> None:

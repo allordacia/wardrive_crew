@@ -198,7 +198,7 @@
   <div id="settings" class="modal" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <span>// CONFIG :: WHITELIST</span>
+        <span>// CONFIG</span>
         <button id="btn-close-settings" class="btn small">[ESC] CLOSE</button>
       </div>
       <div class="modal-body">
@@ -212,21 +212,14 @@
           </div>
         </div>
         <div class="settings-section">
-          <div class="settings-section-head">&gt; tick networks to exclude from score</div>
-          <div class="settings-toolbar">
-            <input id="filter" placeholder="filter ssid / bssid..." />
-            <span id="wl-count">0 whitelisted</span>
-            <button id="btn-refresh" class="btn small">[R] REFRESH</button>
-            <button id="btn-save-wl" class="btn small primary">[S] SAVE</button>
-          </div>
-          <div class="net-list-wrap">
-            <table class="net-list">
-              <thead>
-                <tr><th>WL</th><th>SSID</th><th>BSSID</th><th>CH</th><th>SIG</th><th>ENC</th><th>SEEN</th></tr>
-              </thead>
-              <tbody id="net-tbody"></tbody>
-            </table>
-          </div>
+          <div class="settings-section-head">&gt; features &mdash; toggle radios mid-session</div>
+          <p class="muted" style="margin:0;">
+            ON / OFF override the env var. DEFAULT falls back to whatever
+            the container started with. Whitelist + target individual
+            networks/devices directly from the LIVE.NETS / BT.DEVICES /
+            RF.DEVICES / WIFI.CLIENTS tabs in the main view.
+          </p>
+          <div id="features-list" class="features-list"></div>
         </div>
       </div>
     </div>
