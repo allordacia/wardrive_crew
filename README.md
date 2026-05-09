@@ -116,7 +116,17 @@ AP).
 | `WARDRIVE_LORA_DEVICE`      | unset            | Meshtastic serial device (e.g. `/dev/ttyACM0`); enables LoRa fleet beacons.  |
 | `WARDRIVE_CREW_ID`          | random           | Short crew name broadcast in LoRa beacons (auto-generated if absent).        |
 | `WARDRIVE_LORA_INTERVAL`    | `30`             | Seconds between LoRa beacons.                                                |
+| `WARDRIVE_BT_ENABLED`       | `1`*             | Run the BLE scan loop. *uConsole overlay default; `0` on base.               |
+| `WARDRIVE_BT_INTERVAL`      | `8`              | Seconds per BLE scan window.                                                 |
+| `WARDRIVE_BT_ADAPTER`       | `hci0`*          | HCI adapter name; *unset on base compose.                                    |
 | `WARDRIVE_LOG_LEVEL`        | `INFO`           | Python logging level.                                                        |
+
+The wifi interface can also be selected at runtime from the **CONFIG**
+modal ([F3]). The picker lists every `wireless/` device under
+`/sys/class/net` and the active selection is persisted in the SQLite
+settings table — your choice survives container restarts and overrides
+`WARDRIVE_IFACE` on subsequent boots. Switching is refused while
+monitor mode is on; turn it off first with [F1].
 
 ### AIO peripherals
 
@@ -135,17 +145,30 @@ When the matching env var is set:
   wardrive_crew populate `STATE.fleet` and show up as magenta blips on
   the radar. Requires the SX1262 to have Meshtastic firmware flashed
   (a one-time step done with the official Meshtastic CLI).
+- **Bluetooth (BLE)** — passive advertisement scan via `bleak` over
+  BlueZ on the host. Each heard device becomes a row in the
+  `bt_devices` table, surfaced under the `BT.DEVICES` tab on the
+  terminal with the same `[*]` whitelist / `[!]` target affordances as
+  wifi. The container needs `/var/run/dbus` mounted from the host (the
+  uConsole compose overlay does this) and `bluetoothd` running with
+  `rfkill` not soft-blocking the radio — the AIO setup script
+  (`scripts/uconsole-aio-setup.sh`) verifies and fixes both.
 
 ## Endpoints
 
-- `GET  /`              -- the operator terminal page.
-- `GET  /api/status`    -- JSON snapshot of state.
-- `GET  /api/networks`  -- recent BSSIDs with last-seen GPS fix + whitelist flag.
-- `POST /api/gps`       -- `{lat, lon, speed_mps?, accuracy_m?}`.
-- `POST /api/whitelist` -- `{bssid|ssid, whitelisted}` toggle.
-- `PUT  /api/whitelist` -- `{bssids:[...], ssids:[...]}` replace the whitelist.
+- `GET  /`                -- the operator terminal page.
+- `GET  /api/status`      -- JSON snapshot of state.
+- `GET  /api/networks`    -- recent BSSIDs with last-seen GPS fix + whitelist/target flags.
+- `PUT  /api/network/{bssid}` -- toggle `{whitelisted, targeted}` for a BSSID.
+- `POST /api/gps`         -- `{lat, lon, speed_mps?, accuracy_m?}`.
+- `POST /api/whitelist`   -- `{bssid|ssid, whitelisted}` toggle.
+- `PUT  /api/whitelist`   -- `{bssids:[...], ssids:[...]}` replace the whitelist.
+- `GET  /api/iface`       -- list host wireless interfaces + current selection.
+- `PUT  /api/iface`       -- `{iface}` switch the active scanner interface (refused while monitor is on).
+- `GET  /api/bt/devices`  -- recent BLE devices with whitelist/target flags.
+- `PUT  /api/bt/{mac}`    -- toggle `{whitelisted, targeted}` for a BLE device.
 - `POST /api/monitor/on` / `/api/monitor/off` -- toggle monitor + pcap.
-- `WS   /ws`            -- live state stream for the terminal.
+- `WS   /ws`              -- live state stream for the terminal.
 
 ## Data layout
 
@@ -153,7 +176,7 @@ Inside the bind-mounted `./data/` volume:
 
 ```
 data/
-|- wardrive.sqlite    # bssid table + counters
+|- wardrive.sqlite    # networks + bt_devices + counters + settings
 \- pcaps/             # rotated pcap files (only when monitor is on)
 ```
 

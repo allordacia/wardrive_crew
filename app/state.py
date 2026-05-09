@@ -31,6 +31,18 @@ def _connect() -> sqlite3.Connection:
             whitelisted INTEGER NOT NULL DEFAULT 0,
             targeted INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS bt_devices (
+            mac TEXT PRIMARY KEY,
+            name TEXT,
+            rssi INTEGER,
+            manufacturer TEXT,
+            first_seen REAL,
+            last_seen REAL,
+            lat REAL,
+            lon REAL,
+            whitelisted INTEGER NOT NULL DEFAULT 0,
+            targeted INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
             value INTEGER NOT NULL DEFAULT 0
@@ -104,6 +116,12 @@ class State:
     lora_last_rx_ts: float = 0.0
     crew_id: str = ""
     fleet: dict = field(default_factory=dict)   # crew_id -> last-beacon dict
+    # Bluetooth (BLE) scanner — populated only when WARDRIVE_BT_ENABLED=1
+    bt_active: bool = False
+    bt_adapter: str = ""
+    bt_last_scan_ts: float = 0.0
+    bt_last_scan_new: int = 0
+    bt_last_scan_seen: int = 0
 
     def total_networks(self) -> int:
         cur = self.db.execute(
@@ -167,6 +185,96 @@ class State:
 
     def total_targets(self) -> int:
         cur = self.db.execute("SELECT COUNT(*) FROM networks WHERE targeted=1")
+        return int(cur.fetchone()[0])
+
+    # ---- bluetooth (BLE) helpers ----
+    def add_bt_device(
+        self,
+        mac: str,
+        name: str,
+        rssi: Optional[int],
+        manufacturer: str,
+    ) -> bool:
+        """Insert/update a BLE device. Returns True if it was new."""
+        mac = (mac or "").lower()
+        if not mac:
+            return False
+        now = time.time()
+        lat = self.gps.lat if self.gps.have_fix else None
+        lon = self.gps.lon if self.gps.have_fix else None
+        cur = self.db.execute("SELECT 1 FROM bt_devices WHERE mac=?", (mac,))
+        new = cur.fetchone() is None
+        if new:
+            self.db.execute(
+                "INSERT INTO bt_devices(mac, name, rssi, manufacturer, "
+                "first_seen, last_seen, lat, lon) VALUES (?,?,?,?,?,?,?,?)",
+                (mac, name, rssi, manufacturer, now, now, lat, lon),
+            )
+        else:
+            # Only overwrite name/manufacturer when we actually heard something
+            # informative — many BLE adverts come anonymous.
+            self.db.execute(
+                "UPDATE bt_devices SET "
+                "name=COALESCE(NULLIF(?, ''), name), "
+                "rssi=COALESCE(?, rssi), "
+                "manufacturer=COALESCE(NULLIF(?, ''), manufacturer), "
+                "last_seen=?, "
+                "lat=COALESCE(?, lat), lon=COALESCE(?, lon) "
+                "WHERE mac=?",
+                (name, rssi, manufacturer, now, lat, lon, mac),
+            )
+        self.db.commit()
+        return new
+
+    def set_bt_whitelist(self, mac: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE bt_devices SET whitelisted=? WHERE mac=?",
+            (1 if on else 0, (mac or "").lower()),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def set_bt_target(self, mac: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE bt_devices SET targeted=? WHERE mac=?",
+            (1 if on else 0, (mac or "").lower()),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def visible_bt_devices(self, limit: int = 24, max_age_s: float = 300.0) -> list[dict]:
+        """Recently-heard BLE devices for the live BT panel. Sorted by RSSI
+        (strongest first), tie-broken by last_seen."""
+        cutoff = time.time() - max_age_s
+        cur = self.db.execute(
+            "SELECT mac, name, rssi, manufacturer, last_seen, "
+            "whitelisted, targeted "
+            "FROM bt_devices WHERE last_seen >= ? "
+            "ORDER BY COALESCE(rssi, -999) DESC, last_seen DESC LIMIT ?",
+            (cutoff, max(1, min(limit, 200))),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append({
+                "mac": r[0], "name": r[1] or "", "rssi": r[2],
+                "manufacturer": r[3] or "", "last_seen": r[4],
+                "whitelisted": bool(r[5]), "targeted": bool(r[6]),
+            })
+        return out
+
+    def bt_devices_total(self) -> int:
+        cur = self.db.execute("SELECT COUNT(*) FROM bt_devices WHERE whitelisted=0")
+        return int(cur.fetchone()[0])
+
+    def bt_targets_total(self) -> int:
+        cur = self.db.execute("SELECT COUNT(*) FROM bt_devices WHERE targeted=1")
+        return int(cur.fetchone()[0])
+
+    def bt_visible_count(self, max_age_s: float = 30.0) -> int:
+        cutoff = time.time() - max_age_s
+        cur = self.db.execute(
+            "SELECT COUNT(*) FROM bt_devices WHERE last_seen >= ?", (cutoff,)
+        )
         return int(cur.fetchone()[0])
 
     # ---- generic key/value settings ----

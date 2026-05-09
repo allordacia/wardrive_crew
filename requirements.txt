@@ -6,3 +6,7 @@ pyserial==3.5
 # build so the import is available; if you don't have a Meshtastic node,
 # the lora_loop is a no-op and never imports it at runtime path.
 meshtastic==2.5.9
+# Optional — only used when WARDRIVE_BT_ENABLED=1. Passive BLE scanning
+# via BlueZ over DBus. Disabled by default in the base compose; on by
+# default in the uConsole AIO overlay.
+bleak==0.22.3

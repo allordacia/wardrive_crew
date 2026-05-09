@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         util-linux \
         rtl-sdr \
         librtlsdr0 \
+        bluez \
+        bluez-tools \
+        dbus \
+        rfkill \
     && rm -rf /var/lib/apt/lists/*
 
 # dumpcap needs to run as non-root in the wireshark group normally; we run

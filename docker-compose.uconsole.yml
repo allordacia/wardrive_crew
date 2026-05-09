@@ -21,9 +21,11 @@ services:
       - "/dev/rtc0:/dev/rtc0"
     # RTL-SDR is a USB device — pass the USB bus through. (Docker compose
     # merges volume lists additively, so this adds to the base ./data
-    # bind without duplicating it.)
+    # bind without duplicating it.) /var/run/dbus is the host BlueZ DBus
+    # socket — bleak talks to bluetoothd there to drive BLE scans.
     volumes:
       - /dev/bus/usb:/dev/bus/usb
+      - /var/run/dbus:/var/run/dbus
     environment:
       WARDRIVE_IFACE: "${WARDRIVE_IFACE:-wlan1}"
       WARDRIVE_GPS_DEVICE: "${WARDRIVE_GPS_DEVICE:-/dev/ttyAMA0}"
@@ -33,6 +35,11 @@ services:
       # Run the RTL-SDR sweep loop. Requires the RTL-SDR rail to be powered
       # on (aio_ctl sdr on) and rtl_power present in the container.
       WARDRIVE_SDR_ENABLED: "${WARDRIVE_SDR_ENABLED:-1}"
+      # Passive BLE scan via the CM5 / AIO Bluetooth radio. Requires
+      # bluetoothd running on the host and rfkill unblocked.
+      WARDRIVE_BT_ENABLED: "${WARDRIVE_BT_ENABLED:-1}"
+      WARDRIVE_BT_INTERVAL: "${WARDRIVE_BT_INTERVAL:-8}"
+      WARDRIVE_BT_ADAPTER: "${WARDRIVE_BT_ADAPTER:-hci0}"
       # LoRa beacons. Empty = disabled. Set to the Meshtastic node's
       # serial path (e.g. /dev/ttyACM0) once Meshtastic firmware is
       # flashed onto the SX1262.

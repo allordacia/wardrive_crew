@@ -285,13 +285,51 @@ html, body {
 }
 .rc-line.muted { color: var(--ink-dim); }
 
-/* Live networks panel */
+/* Live networks / BT panel — tabbed */
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--frame);
+  background: linear-gradient(180deg, rgba(80,200,120,0.04), transparent);
+  flex-wrap: wrap;
+}
+.tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-dim);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 2px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.tab:hover  { color: var(--ink); }
+.tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+  text-shadow: var(--glow);
+}
+.tab-meta {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--ink-dim);
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 0 6px;
+}
+
 .live-wrap {
   flex: 1 1 auto;
   overflow: auto;
   max-height: 240px;
   border-bottom: 1px solid var(--frame);
 }
+.live-wrap[hidden] { display: none; }
 .live-nets {
   width: 100%;
   border-collapse: collapse;
@@ -508,6 +546,25 @@ html, body {
   letter-spacing: 1px;
 }
 .settings-toolbar input::placeholder { color: var(--ink-faint); }
+.settings-toolbar select {
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--frame);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 1px;
+  min-width: 160px;
+}
+.settings-toolbar .lbl {
+  font-size: 12px;
+  color: var(--ink-dim);
+  letter-spacing: 1.5px;
+}
+.settings-toolbar .muted {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
 #wl-count { font-size: 12px; color: var(--ink-dim); }
 
 .net-list-wrap {

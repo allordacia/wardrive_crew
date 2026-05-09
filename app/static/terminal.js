@@ -52,8 +52,10 @@
     rtc:   document.querySelector('[data-flag="rtc"]'),
     sdr:   document.querySelector('[data-flag="sdr"]'),
     lora:  document.querySelector('[data-flag="lora"]'),
+    bt:    document.querySelector('[data-flag="bt"]'),
     warn:  document.querySelector('[data-flag="warn"]'),
   };
+  const btTbody = document.getElementById("bt-tbody");
 
   // ----- snapshot state from /ws -------------------------------------------
   const sim = {
@@ -81,6 +83,10 @@
     iface: "--",
     visible_nets: [],
     targets_total: 0,
+    bt_active: false,
+    bt_visible: [],
+    bt_devices_total: 0,
+    bt_targets_total: 0,
     snapshot: null,
   };
   let prev = JSON.parse(JSON.stringify(sim));
@@ -437,6 +443,26 @@
         pushLog("tgt", `! target in range  ${(n.ssid || "(hidden)")}  ${n.bssid}`);
       }
     }
+
+    // BT — newly-heard BLE devices register as cyan blips on the radar;
+    // targeted BLE devices coming in range pulse red like wifi targets.
+    const btNew = (s.bt && s.bt.last_scan_new) || 0;
+    const prevBtNew = (prev.snapshot && prev.snapshot.bt && prev.snapshot.bt.last_scan_new) || -1;
+    if (btNew > 0 && btNew !== prevBtNew) {
+      for (let i = 0; i < Math.min(6, btNew); i++) spawnBlip(CYAN, 0.9);
+      pushLog("rf", `~ +${btNew} new BLE device${btNew > 1 ? "s" : ""}`);
+    }
+    const visBtTargets = (s.bt_visible || []).filter(d => d.targeted);
+    const prevBtTargMacs = new Set(
+      ((prev.snapshot && prev.snapshot.bt_visible) || [])
+        .filter(d => d.targeted).map(d => d.mac)
+    );
+    for (const d of visBtTargets) {
+      if (!prevBtTargMacs.has(d.mac)) {
+        spawnBlip(RED, 1.3);
+        pushLog("tgt", `! BT target in range  ${d.name || "(anon)"}  ${(d.mac||"").toUpperCase()}`);
+      }
+    }
   }
 
   // ============================================================
@@ -473,6 +499,7 @@
     stat.rtc.dataset.active  = sim.rtc_synced ? "1" : "0";
     stat.sdr.dataset.active  = sim.sdr_active ? "1" : "0";
     stat.lora.dataset.active = sim.lora_active ? "1" : "0";
+    if (stat.bt) stat.bt.dataset.active = sim.bt_active ? "1" : "0";
     stat.warn.dataset.active = (sim.speed > 180 || (sim.snapshot && sim.snapshot.status && /fail|error/i.test(sim.snapshot.status))) ? "1" : "0";
 
     btnMon.dataset.on = sim.monitor_on ? "1" : "0";
@@ -484,9 +511,10 @@
 
     scopeMeta.textContent = `${BLIPS.length} blip${BLIPS.length === 1 ? "" : "s"} :: sweep ${tickHz().toFixed(1)}hz`;
     if (liveMeta) {
-      const visible = (sim.visible_nets || []).length;
+      const vNets = (sim.visible_nets || []).length;
+      const vBt   = (sim.bt_visible || []).length;
       liveMeta.textContent =
-        `${visible} visible :: ${sim.targets_total || 0} target${(sim.targets_total||0) === 1 ? "" : "s"}`;
+        `nets ${vNets}/${sim.targets_total || 0}t :: bt ${vBt}/${sim.bt_targets_total || 0}t`;
     }
   }
 
@@ -538,15 +566,17 @@
     liveTbody.replaceChildren(frag);
   }
 
-  // Single delegated handler for [*] / [!] toggles. Updates the row
-  // optimistically and rolls back if the server rejects the change.
-  if (liveTbody) {
-    liveTbody.addEventListener("click", async (ev) => {
+  // Generic flag-toggle: updates row optimistically, rolls back on failure.
+  // `endpoint(id)` builds the PUT URL; `idAttr` is the row's data attribute
+  // that holds the resource id (bssid / mac).
+  function bindFlagToggles(tbody, endpoint, idAttr, label) {
+    if (!tbody) return;
+    tbody.addEventListener("click", async (ev) => {
       const btn = ev.target.closest(".flag-btn");
       if (!btn) return;
       const tr = btn.closest("tr");
-      const bssid = tr && tr.dataset.bssid;
-      if (!bssid) return;
+      const id = tr && tr.dataset[idAttr];
+      if (!id) return;
       const kind = btn.dataset.kind;
       const next = btn.dataset.on === "1" ? 0 : 1;
       const prevOn = btn.dataset.on;
@@ -557,19 +587,17 @@
         const body = kind === "wl"
           ? { whitelisted: next === 1 }
           : { targeted:    next === 1 };
-        const r = await fetch(`/api/network/${encodeURIComponent(bssid)}`, {
+        const r = await fetch(endpoint(id), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
         if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
-        const j = await r.json();
         const tag = kind === "wl" ? "whitelist" : "target";
         const verb = next === 1 ? "+" : "-";
         pushLog(kind === "tg" ? "tgt" : "sys",
-                `${verb} ${tag}  ${bssid}  ${(j && j.ssid) || ""}`);
+                `${verb} ${label} ${tag}  ${id}`);
       } catch (e) {
-        // rollback
         btn.dataset.on = prevOn;
         if (kind === "wl") tr.classList.toggle("row-wl", prevOn === "1");
         if (kind === "tg") tr.classList.toggle("row-tg", prevOn === "1");
@@ -577,6 +605,69 @@
       }
     });
   }
+
+  bindFlagToggles(liveTbody,
+                  (id) => `/api/network/${encodeURIComponent(id)}`,
+                  "bssid", "net");
+  bindFlagToggles(btTbody,
+                  (id) => `/api/bt/${encodeURIComponent(id)}`,
+                  "mac", "bt");
+
+  // ============================================================
+  //  BT.DEVICES table — visible BLE devices
+  // ============================================================
+  const btSeen = new Set();
+  function updateBtDevices() {
+    if (!btTbody) return;
+    const devs = sim.bt_visible || [];
+    if (devs.length === 0) {
+      btTbody.innerHTML = '<tr class="empty"><td colspan="6">// no BLE devices in range</td></tr>';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    const nowSec = Date.now() / 1000;
+    for (const d of devs) {
+      const tr = document.createElement("tr");
+      tr.dataset.mac = d.mac;
+      if (d.whitelisted) tr.classList.add("row-wl");
+      if (d.targeted)    tr.classList.add("row-tg");
+      if (!btSeen.has(d.mac)) { tr.classList.add("fresh"); btSeen.add(d.mac); }
+      const rssiTxt = (d.rssi != null) ? `${d.rssi} dBm` : "--";
+      const ageS = d.last_seen ? Math.max(0, nowSec - d.last_seen) : null;
+      const ageTxt = ageS == null ? "--"
+        : ageS < 60 ? `${Math.round(ageS)}s`
+        : ageS < 3600 ? `${Math.round(ageS / 60)}m`
+        : `${Math.round(ageS / 3600)}h`;
+      const macShort = (d.mac || "").toUpperCase();
+      const nameTxt = d.name || "(anon)";
+      tr.innerHTML =
+        `<td class="c-act">` +
+          `<button class="flag-btn" data-kind="wl" data-on="${d.whitelisted ? 1 : 0}" title="whitelist">[*]</button>` +
+          `<button class="flag-btn" data-kind="tg" data-on="${d.targeted    ? 1 : 0}" title="add to target list">[!]</button>` +
+        `</td>` +
+        `<td class="c-ssid">${escapeHtml(nameTxt)}</td>` +
+        `<td class="c-bssid">${escapeHtml(macShort)}</td>` +
+        `<td class="c-sig">${rssiTxt}</td>` +
+        `<td class="c-enc">${escapeHtml(d.manufacturer || "-")}</td>` +
+        `<td class="c-age">${ageTxt}</td>`;
+      frag.appendChild(tr);
+    }
+    btTbody.replaceChildren(frag);
+  }
+
+  // ============================================================
+  //  Tab switching for the live panel
+  // ============================================================
+  document.querySelectorAll(".panel-tabs .tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      const id = tab.dataset.tab;
+      document.querySelectorAll(".panel-tabs .tab")
+        .forEach(t => t.classList.toggle("active", t === tab));
+      document.querySelectorAll('[data-tab-pane]').forEach(p => {
+        p.hidden = p.dataset.tabPane !== id;
+      });
+    });
+  });
 
   function updateRadioPanel(s) {
     if (!s) return;
@@ -639,6 +730,17 @@
     } else {
       setCard("lora", "0", "OFF", ["no Meshtastic node", "set WARDRIVE_LORA_DEVICE=..."]);
     }
+
+    // BT (BLE)
+    const bt = s.bt || {};
+    if (bt.active) {
+      setCard("bt", "1", "BLE SCAN", [
+        `${bt.adapter || "hci0"} :: ${bt.devices_total || 0} dev :: ${bt.targets_total || 0} tgt`,
+        `+${bt.last_scan_new || 0} new / ${bt.last_scan_seen || 0} live :: ${fmtAge(bt.last_scan_age_s)}`,
+      ]);
+    } else {
+      setCard("bt", "0", "OFF", ["no BLE scanner running", "set WARDRIVE_BT_ENABLED=1"]);
+    }
   }
 
   // ============================================================
@@ -677,6 +779,10 @@
         sim.iface = s.iface || sim.iface;
         sim.visible_nets = Array.isArray(s.visible_nets) ? s.visible_nets : [];
         sim.targets_total = s.targets_total || 0;
+        sim.bt_active = !!s.bt_active;
+        sim.bt_visible = Array.isArray(s.bt_visible) ? s.bt_visible : [];
+        sim.bt_devices_total = s.bt_devices_total || 0;
+        sim.bt_targets_total = s.bt_targets_total || 0;
         sim.snapshot = s;
 
         reactToSnapshot(s);
@@ -685,6 +791,7 @@
         updateChrome();
         updateRadioPanel(s);
         updateLiveNets();
+        updateBtDevices();
       } catch (e) { /* ignore */ }
     };
     _ws.onclose = () => {
@@ -866,9 +973,83 @@
     }
   });
 
+  // ============================================================
+  //  Wifi interface picker (CONFIG modal)
+  // ============================================================
+  const ifaceSelect = document.getElementById("iface-select");
+  const ifaceInfo   = document.getElementById("iface-info");
+  const btnIfaceRefresh = document.getElementById("btn-iface-refresh");
+
+  async function loadIfaces() {
+    if (!ifaceSelect) return;
+    let data;
+    try {
+      const r = await fetch("/api/iface");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      data = await r.json();
+    } catch (e) {
+      if (ifaceInfo) ifaceInfo.textContent = `! load failed: ${e}`;
+      return;
+    }
+    const ifs = data.interfaces || [];
+    ifaceSelect.innerHTML = "";
+    if (ifs.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = data.current || "";
+      opt.textContent = (data.current || "--") + " (none detected)";
+      ifaceSelect.appendChild(opt);
+    } else {
+      for (const i of ifs) {
+        const opt = document.createElement("option");
+        opt.value = i.name;
+        opt.textContent = `${i.name}  [${i.operstate || "?"}]`;
+        if (i.name === data.current) opt.selected = true;
+        ifaceSelect.appendChild(opt);
+      }
+      // Surface a saved selection that no longer matches present hardware.
+      if (data.current && !ifs.some(i => i.name === data.current)) {
+        const opt = document.createElement("option");
+        opt.value = data.current;
+        opt.textContent = `${data.current}  [missing]`;
+        opt.selected = true;
+        ifaceSelect.appendChild(opt);
+      }
+    }
+    if (ifaceInfo) {
+      ifaceInfo.textContent = data.current
+        ? (data.current_present ? `current: ${data.current}`
+                                : `! current ${data.current} not present`)
+        : "no interface selected";
+    }
+  }
+
+  if (ifaceSelect) {
+    ifaceSelect.addEventListener("change", async () => {
+      const next = ifaceSelect.value;
+      if (ifaceInfo) ifaceInfo.textContent = `switching to ${next}...`;
+      try {
+        const r = await fetch("/api/iface", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ iface: next }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+        if (ifaceInfo) ifaceInfo.textContent = `current: ${j.iface}`;
+        statusEl.textContent = `> iface = ${j.iface}`;
+        pushLog("sys", `! iface switched -> ${j.iface}`);
+      } catch (e) {
+        if (ifaceInfo) ifaceInfo.textContent = `! ${e}`;
+        pushLog("warn", `! iface switch failed: ${e}`);
+        await loadIfaces();
+      }
+    });
+  }
+  if (btnIfaceRefresh) btnIfaceRefresh.addEventListener("click", loadIfaces);
+
   btnSettings.addEventListener("click", async () => {
     modal.hidden = false;
-    await loadNetworks();
+    await Promise.all([loadIfaces(), loadNetworks()]);
   });
   btnCloseSettings.addEventListener("click", () => { modal.hidden = true; });
   modal.addEventListener("click", (ev) => {

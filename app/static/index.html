@@ -26,6 +26,7 @@
       <span class="stat" data-flag="rtc">[ RTC ]</span>
       <span class="stat" data-flag="sdr">[ SDR ]</span>
       <span class="stat" data-flag="lora">[ LORA ]</span>
+      <span class="stat" data-flag="bt">[ BT ]</span>
       <span class="stat alert" data-flag="warn">[ !! ]</span>
     </div>
 
@@ -84,18 +85,25 @@
             <div class="rc-line">--</div>
             <div class="rc-line muted">--</div>
           </div>
+          <div class="radio-card" data-radio="bt">
+            <div class="rc-head"><span class="rc-name">BT</span><span class="rc-state">--</span></div>
+            <div class="rc-line">--</div>
+            <div class="rc-line muted">--</div>
+          </div>
         </div>
       </section>
 
       <section class="panel panel-live">
-        <div class="panel-head">
-          <span class="ph-title">// LIVE.NETS</span>
-          <span class="ph-meta">
+        <div class="panel-tabs">
+          <button class="tab active" data-tab="nets">// LIVE.NETS</button>
+          <button class="tab" data-tab="bt">// BT.DEVICES</button>
+          <span class="tab-meta">
             <span id="live-meta">--</span>
             <span class="legend"><span class="lg lg-wl">[*] WL</span> <span class="lg lg-tg">[!] TGT</span></span>
           </span>
         </div>
-        <div class="live-wrap">
+
+        <div class="live-wrap" data-tab-pane="nets">
           <table class="live-nets">
             <thead>
               <tr>
@@ -113,6 +121,25 @@
             </tbody>
           </table>
         </div>
+
+        <div class="live-wrap" data-tab-pane="bt" hidden>
+          <table class="live-nets">
+            <thead>
+              <tr>
+                <th class="c-act">FLAG</th>
+                <th class="c-ssid">NAME</th>
+                <th class="c-bssid">MAC</th>
+                <th class="c-sig">RSSI</th>
+                <th class="c-enc">MFG</th>
+                <th class="c-age">AGE</th>
+              </tr>
+            </thead>
+            <tbody id="bt-tbody">
+              <tr class="empty"><td colspan="6">// awaiting BT scan...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
         <pre id="log" class="ticker" aria-live="polite"></pre>
       </section>
     </main>
@@ -133,6 +160,15 @@
         <button id="btn-close-settings" class="btn small">[ESC] CLOSE</button>
       </div>
       <div class="modal-body">
+        <div class="settings-section">
+          <div class="settings-section-head">&gt; wifi interface</div>
+          <div class="settings-toolbar">
+            <label for="iface-select" class="lbl">IFACE</label>
+            <select id="iface-select"></select>
+            <button id="btn-iface-refresh" class="btn small">[R] RESCAN</button>
+            <span id="iface-info" class="muted">--</span>
+          </div>
+        </div>
         <div class="settings-section">
           <div class="settings-section-head">&gt; tick networks to exclude from score</div>
           <div class="settings-toolbar">
