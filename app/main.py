@@ -439,6 +439,62 @@ def rf_detail(key: str) -> dict:
 # Wifi STAs / clients (tshark sidecar)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Mission lifecycle + debriefing
+# ---------------------------------------------------------------------------
+
+class MissionStartIn(BaseModel):
+    label: str = ""
+
+
+@app.post("/api/mission/start")
+def mission_start(body: MissionStartIn | None = None) -> dict:
+    label = (body.label if body else "") or ""
+    return STATE.start_mission(label=label)
+
+
+@app.post("/api/mission/end")
+def mission_end() -> dict:
+    return STATE.end_mission()
+
+
+@app.post("/api/mission/dismiss")
+def mission_dismiss() -> dict:
+    return STATE.dismiss_debriefing()
+
+
+@app.get("/api/mission/current")
+def mission_current() -> dict:
+    return STATE.mission_current()
+
+
+@app.get("/api/missions")
+def mission_list(limit: int = 20) -> JSONResponse:
+    return JSONResponse(STATE.list_missions(limit=limit))
+
+
+@app.post("/api/backup")
+def backup_db() -> dict:
+    """Snapshot the SQLite DB into /data/backups/ with a UTC-timestamped
+    name. Cheap operator-side checkpoint for "end of mission" hygiene."""
+    import shutil as _sh
+    from datetime import datetime as _dt
+    src = Path(os.environ.get("WARDRIVE_DATA_DIR", "/data")) / "wardrive.sqlite"
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"DB not found at {src}")
+    backups_dir = src.parent / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    stamp = _dt.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    dst = backups_dir / f"wardrive-{stamp}.sqlite"
+    try:
+        _sh.copy2(src, dst)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"backup failed: {e}")
+    size = dst.stat().st_size if dst.exists() else 0
+    log.info("backup: %s (%d bytes)", dst, size)
+    return {"ok": True, "path": str(dst), "bytes": size}
+
+
 @app.get("/api/clients")
 def list_wifi_clients(limit: int = 500) -> JSONResponse:
     cur = STATE.db.execute(
@@ -626,6 +682,7 @@ def _snapshot() -> dict:
         "wifi_clients_total": STATE.wifi_clients_total(),
         "wifi_client_targets_total": STATE.wifi_client_targets_total(),
         "wifi_clients_visible": STATE.visible_wifi_clients(limit=24),
+        "mission": STATE.mission_current(),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,

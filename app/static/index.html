@@ -27,6 +27,7 @@
       <span class="stat" data-flag="sdr">[ SDR ]</span>
       <span class="stat" data-flag="lora">[ LORA ]</span>
       <span class="stat" data-flag="bt">[ BT ]</span>
+      <span class="stat" data-flag="mission" id="mission-pill">[ MISSION:IDLE ]</span>
       <span class="stat alert" data-flag="warn">[ !! ]</span>
     </div>
 
@@ -188,6 +189,7 @@
       <button id="btn-monitor" class="btn">[F1] MONITOR: OFF</button>
       <button id="btn-gps" class="btn">[F2] GPS: OFF</button>
       <button id="btn-settings" class="btn">[F3] CONFIG</button>
+      <button id="btn-mission" class="btn">[M] MISSION</button>
       <span id="status" class="status-msg">&gt; idle</span>
       <span class="cursor" aria-hidden="true">&#9608;</span>
     </footer>
@@ -225,6 +227,53 @@
               <tbody id="net-tbody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="mission-modal" class="modal" hidden>
+    <div class="modal-card" style="max-width: 640px;">
+      <div class="modal-head">
+        <span id="mission-modal-title">// MISSION</span>
+        <button id="btn-mission-close" class="btn small">[ESC] CLOSE</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section" id="mission-idle" hidden>
+          <div class="settings-section-head">&gt; idle</div>
+          <p style="margin:0; color: var(--ink-dim); font-size: 14px;">
+            No mission running. Starting one snapshots the current time
+            and begins counting new networks / BT / RF / clients toward
+            the next debriefing.
+          </p>
+          <div class="settings-toolbar">
+            <input id="mission-label" type="text" maxlength="64"
+                   placeholder="optional mission label..." />
+            <button id="btn-mission-start" class="btn small primary">[S] START</button>
+          </div>
+          <div id="mission-recent" class="settings-section-head" style="margin-top:10px;">
+            &gt; recent
+          </div>
+          <div id="mission-history"></div>
+        </div>
+
+        <div class="settings-section" id="mission-active" hidden>
+          <div class="settings-section-head">&gt; mission active</div>
+          <div id="mission-live"></div>
+          <div class="settings-toolbar" style="margin-top:8px;">
+            <button id="btn-mission-end" class="btn small primary">[E] END MISSION</button>
+          </div>
+        </div>
+
+        <div class="settings-section" id="mission-debrief" hidden>
+          <div class="settings-section-head">&gt; debriefing</div>
+          <div id="mission-debrief-stats"></div>
+          <div class="settings-toolbar" style="margin-top:8px;">
+            <button id="btn-mission-backup" class="btn small">[B] BACKUP DB</button>
+            <button class="btn small" disabled title="lands in PR-B">[U] WIGLE UPLOAD</button>
+            <button id="btn-mission-dismiss" class="btn small primary">[D] DISMISS</button>
+          </div>
+          <div id="mission-debrief-result" style="margin-top:8px; font-size:13px; color: var(--ink-dim);"></div>
         </div>
       </div>
     </div>
