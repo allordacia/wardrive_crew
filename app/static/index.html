@@ -51,9 +51,21 @@
             <div class="r-label">PKT</div>
             <div class="r-val" id="seg-packets">00000000</div>
           </div>
-          <div class="readout">
+          <div class="readout" title="Composite activity gauge: 4 (idle) + new_BSSIDs * 8 + packets * 0.05 + RF_signals * 0.1 + GPS_speed_mph">
             <div class="r-label">VEL</div>
             <div class="r-val accent" id="seg-speed">000</div>
+          </div>
+          <div class="readout">
+            <div class="r-label">STA</div>
+            <div class="r-val" id="seg-clients">00000</div>
+          </div>
+          <div class="readout">
+            <div class="r-label">BT</div>
+            <div class="r-val" id="seg-bt">00000</div>
+          </div>
+          <div class="readout">
+            <div class="r-label">RF</div>
+            <div class="r-val" id="seg-rf">00000</div>
           </div>
         </div>
       </section>
@@ -186,8 +198,6 @@
     </main>
 
     <footer id="controls">
-      <button id="btn-monitor" class="btn">[F1] MONITOR: OFF</button>
-      <button id="btn-gps" class="btn">[F2] GPS: OFF</button>
       <button id="btn-settings" class="btn">[F3] CONFIG</button>
       <button id="btn-mission" class="btn">[M] MISSION</button>
       <span id="status" class="status-msg">&gt; idle</span>
