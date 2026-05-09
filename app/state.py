@@ -51,18 +51,52 @@ def _connect() -> sqlite3.Connection:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        -- Per-target observation history (RSSI / GPS breadcrumb). Pruned
+        -- to OBS_KEEP_PER_TARGET on insert so the table doesn't grow
+        -- without bound on long sessions.
+        CREATE TABLE IF NOT EXISTS network_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bssid TEXT NOT NULL,
+            ts REAL NOT NULL,
+            signal INTEGER,
+            channel INTEGER,
+            lat REAL,
+            lon REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_netobs_bssid_ts
+            ON network_observations(bssid, ts);
+        CREATE TABLE IF NOT EXISTS bt_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mac TEXT NOT NULL,
+            ts REAL NOT NULL,
+            rssi INTEGER,
+            lat REAL,
+            lon REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_btobs_mac_ts
+            ON bt_observations(mac, ts);
         INSERT OR IGNORE INTO counters(name, value) VALUES ('packets', 0);
         INSERT OR IGNORE INTO counters(name, value) VALUES ('pcap_bytes', 0);
         """
     )
-    # Migration for dbs created before the whitelisted / targeted columns existed.
+    # Column migrations for dbs created before these columns existed.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(networks)").fetchall()}
     if "whitelisted" not in cols:
         conn.execute("ALTER TABLE networks ADD COLUMN whitelisted INTEGER NOT NULL DEFAULT 0")
     if "targeted" not in cols:
         conn.execute("ALTER TABLE networks ADD COLUMN targeted INTEGER NOT NULL DEFAULT 0")
+    if "notes" not in cols:
+        conn.execute("ALTER TABLE networks ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+    bt_cols = {row[1] for row in conn.execute("PRAGMA table_info(bt_devices)").fetchall()}
+    if "notes" not in bt_cols:
+        conn.execute("ALTER TABLE bt_devices ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
+
+
+# Cap observations per target so a long session doesn't bloat the DB. Pruned
+# on insert.
+OBS_KEEP_PER_TARGET = 500
 
 
 @dataclass
@@ -223,6 +257,16 @@ class State:
                 "WHERE mac=?",
                 (name, rssi, manufacturer, now, lat, lon, mac),
             )
+        # Same as wifi: record observations only for targeted devices.
+        cur = self.db.execute("SELECT targeted FROM bt_devices WHERE mac=?", (mac,))
+        row = cur.fetchone()
+        if row and row[0]:
+            self.db.execute(
+                "INSERT INTO bt_observations(mac, ts, rssi, lat, lon) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (mac, now, rssi, lat, lon),
+            )
+            self._prune_bt_obs(mac)
         self.db.commit()
         return new
 
@@ -346,8 +390,111 @@ class State:
                 "lat=COALESCE(?, lat), lon=COALESCE(?, lon) WHERE bssid=?",
                 (ssid, channel, signal, encryption, now, lat, lon, bssid),
             )
+        # Record an observation for *targeted* networks only. Recording every
+        # heard BSSID would balloon the DB; the trail is only useful for
+        # devices the operator is actively tracking.
+        cur = self.db.execute("SELECT targeted FROM networks WHERE bssid=?", (bssid,))
+        row = cur.fetchone()
+        if row and row[0]:
+            self.db.execute(
+                "INSERT INTO network_observations(bssid, ts, signal, channel, lat, lon) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (bssid, now, signal, channel, lat, lon),
+            )
+            self._prune_network_obs(bssid)
         self.db.commit()
         return new and not whitelisted
+
+    def _prune_network_obs(self, bssid: str) -> None:
+        self.db.execute(
+            "DELETE FROM network_observations WHERE bssid=? AND id NOT IN ("
+            "SELECT id FROM network_observations WHERE bssid=? "
+            "ORDER BY ts DESC LIMIT ?)",
+            (bssid, bssid, OBS_KEEP_PER_TARGET),
+        )
+
+    def _prune_bt_obs(self, mac: str) -> None:
+        self.db.execute(
+            "DELETE FROM bt_observations WHERE mac=? AND id NOT IN ("
+            "SELECT id FROM bt_observations WHERE mac=? "
+            "ORDER BY ts DESC LIMIT ?)",
+            (mac, mac, OBS_KEEP_PER_TARGET),
+        )
+
+    def network_trail(self, bssid: str, limit: int = 200) -> list[dict]:
+        cur = self.db.execute(
+            "SELECT ts, signal, channel, lat, lon FROM network_observations "
+            "WHERE bssid=? ORDER BY ts DESC LIMIT ?",
+            ((bssid or "").lower(), max(1, min(limit, 1000))),
+        )
+        return [
+            {"ts": r[0], "signal": r[1], "channel": r[2], "lat": r[3], "lon": r[4]}
+            for r in cur.fetchall()
+        ]
+
+    def bt_trail(self, mac: str, limit: int = 200) -> list[dict]:
+        cur = self.db.execute(
+            "SELECT ts, rssi, lat, lon FROM bt_observations "
+            "WHERE mac=? ORDER BY ts DESC LIMIT ?",
+            ((mac or "").lower(), max(1, min(limit, 1000))),
+        )
+        return [
+            {"ts": r[0], "rssi": r[1], "lat": r[2], "lon": r[3]}
+            for r in cur.fetchall()
+        ]
+
+    def set_network_notes(self, bssid: str, notes: str) -> bool:
+        cur = self.db.execute(
+            "UPDATE networks SET notes=? WHERE bssid=?",
+            (notes or "", (bssid or "").lower()),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def set_bt_notes(self, mac: str, notes: str) -> bool:
+        cur = self.db.execute(
+            "UPDATE bt_devices SET notes=? WHERE mac=?",
+            (notes or "", (mac or "").lower()),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def network_detail(self, bssid: str) -> dict | None:
+        cur = self.db.execute(
+            "SELECT bssid, ssid, channel, signal, encryption, first_seen, "
+            "last_seen, lat, lon, whitelisted, targeted, notes "
+            "FROM networks WHERE bssid=?",
+            ((bssid or "").lower(),),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "bssid": r[0], "ssid": r[1], "channel": r[2], "signal": r[3],
+            "encryption": r[4], "first_seen": r[5], "last_seen": r[6],
+            "lat": r[7], "lon": r[8],
+            "whitelisted": bool(r[9]), "targeted": bool(r[10]),
+            "notes": r[11] or "",
+        }
+
+    def bt_detail(self, mac: str) -> dict | None:
+        cur = self.db.execute(
+            "SELECT mac, name, rssi, manufacturer, first_seen, last_seen, "
+            "lat, lon, whitelisted, targeted, notes "
+            "FROM bt_devices WHERE mac=?",
+            ((mac or "").lower(),),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "mac": r[0], "name": r[1] or "", "rssi": r[2],
+            "manufacturer": r[3] or "",
+            "first_seen": r[4], "last_seen": r[5],
+            "lat": r[6], "lon": r[7],
+            "whitelisted": bool(r[8]), "targeted": bool(r[9]),
+            "notes": r[10] or "",
+        }
 
     def add_packets(self, n: int, bytes_: int = 0) -> None:
         if n <= 0 and bytes_ <= 0:

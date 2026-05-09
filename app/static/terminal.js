@@ -554,6 +554,7 @@
         `<td class="c-act">` +
           `<button class="flag-btn" data-kind="wl" data-on="${n.whitelisted ? 1 : 0}" title="whitelist (excludes from score)">[*]</button>` +
           `<button class="flag-btn" data-kind="tg" data-on="${n.targeted    ? 1 : 0}" title="add to target list">[!]</button>` +
+          `<button class="flag-btn" data-kind="open" title="open detail">[+]</button>` +
         `</td>` +
         `<td class="c-ssid">${escapeHtml(ssidShort)}</td>` +
         `<td class="c-bssid" title="${escapeHtml(n.bssid || "")}">${escapeHtml(bssidShort)}</td>` +
@@ -562,6 +563,12 @@
         `<td class="c-enc">${escapeHtml(n.encryption || "-")}</td>` +
         `<td class="c-age">${ageTxt}</td>`;
       frag.appendChild(tr);
+      // Re-attach an open detail row if the user had it expanded.
+      if (openDetail.kind === "net" && openDetail.id === n.bssid) {
+        const dtr = buildDetailRow("net", n.bssid, 7);
+        frag.appendChild(dtr);
+        scheduleDetailRefresh("net", n.bssid, dtr);
+      }
     }
     liveTbody.replaceChildren(frag);
   }
@@ -578,6 +585,11 @@
       const id = tr && tr.dataset[idAttr];
       if (!id) return;
       const kind = btn.dataset.kind;
+      // [+] open detail — no server toggle, just expand the row.
+      if (kind === "open") {
+        toggleDetail(idAttr === "bssid" ? "net" : "bt", id);
+        return;
+      }
       const next = btn.dataset.on === "1" ? 0 : 1;
       const prevOn = btn.dataset.on;
       btn.dataset.on = String(next);
@@ -644,6 +656,7 @@
         `<td class="c-act">` +
           `<button class="flag-btn" data-kind="wl" data-on="${d.whitelisted ? 1 : 0}" title="whitelist">[*]</button>` +
           `<button class="flag-btn" data-kind="tg" data-on="${d.targeted    ? 1 : 0}" title="add to target list">[!]</button>` +
+          `<button class="flag-btn" data-kind="open" title="open detail">[+]</button>` +
         `</td>` +
         `<td class="c-ssid">${escapeHtml(nameTxt)}</td>` +
         `<td class="c-bssid">${escapeHtml(macShort)}</td>` +
@@ -651,9 +664,276 @@
         `<td class="c-enc">${escapeHtml(d.manufacturer || "-")}</td>` +
         `<td class="c-age">${ageTxt}</td>`;
       frag.appendChild(tr);
+      if (openDetail.kind === "bt" && openDetail.id === d.mac) {
+        const dtr = buildDetailRow("bt", d.mac, 6);
+        frag.appendChild(dtr);
+        scheduleDetailRefresh("bt", d.mac, dtr);
+      }
     }
     btTbody.replaceChildren(frag);
   }
+
+  // ============================================================
+  //  Target detail panel — inline expand under the clicked row.
+  //  Shows recent RSSI sparkline + notes editor + (PR-B) actions.
+  // ============================================================
+  const openDetail = { kind: null, id: null };  // 'net' | 'bt'
+
+  function buildDetailRow(kind, id, colspan) {
+    const tr = document.createElement("tr");
+    tr.classList.add("detail");
+    tr.dataset.detailFor = `${kind}:${id}`;
+    const td = document.createElement("td");
+    td.colSpan = colspan;
+    td.innerHTML = renderDetailSkeleton(kind, id);
+    tr.appendChild(td);
+    return tr;
+  }
+
+  function renderDetailSkeleton(kind, id) {
+    const idLabel = kind === "net" ? "BSSID" : "MAC";
+    return `
+      <div class="detail-grid">
+        <div class="detail-block">
+          <div class="detail-block-head">// ${idLabel} ${escapeHtml(id)}</div>
+          <div class="detail-trail">
+            <canvas class="spark" width="220" height="36"></canvas>
+            <div class="detail-stats">loading trail...</div>
+          </div>
+          <div class="detail-actions">
+            <button class="btn small" data-action="dwell" disabled
+                    title="channel-dwell on this target (PR-B)">[D] DWELL</button>
+            <button class="btn small" data-action="enum" disabled
+                    title="GATT enumerate this BLE target (PR-B)">[E] ENUM</button>
+          </div>
+          <div class="auth-banner" data-auth-banner></div>
+        </div>
+        <div class="detail-block detail-notes">
+          <div class="detail-block-head">// NOTES</div>
+          <textarea data-notes maxlength="1000"
+                    placeholder="operator notes (max 1000 chars)..."></textarea>
+          <div class="detail-actions">
+            <button class="btn small" data-action="save-notes">[S] SAVE</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function refreshDetail(kind, id, tr) {
+    const block = tr.querySelector(".detail-block");
+    if (!block) return;
+    const url = kind === "net"
+      ? `/api/network/${encodeURIComponent(id)}/trail?limit=120`
+      : `/api/bt/${encodeURIComponent(id)}/trail?limit=120`;
+    let payload;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      payload = await r.json();
+    } catch (e) {
+      const stats = block.querySelector(".detail-stats");
+      if (stats) stats.textContent = `! load failed: ${e}`;
+      return;
+    }
+    const trail = payload.trail || [];
+    const detail = payload.detail || {};
+
+    // Notes
+    const ta = block.querySelector("[data-notes]");
+    if (ta && document.activeElement !== ta) {
+      ta.value = detail.notes || "";
+    }
+
+    // Sparkline of recent rssi/signal (newest first → reverse).
+    const spark = block.querySelector(".spark");
+    const stats = block.querySelector(".detail-stats");
+    const series = trail
+      .map(t => kind === "net" ? t.signal : t.rssi)
+      .filter(v => v != null)
+      .reverse();
+    drawSparkline(spark, series);
+
+    if (series.length) {
+      const last = series[series.length - 1];
+      const min = Math.min(...series);
+      const max = Math.max(...series);
+      const avg = (series.reduce((a,b)=>a+b,0) / series.length).toFixed(1);
+      stats.textContent =
+        `n=${series.length}  last=${last}dBm  min=${min}  max=${max}  avg=${avg}`;
+    } else {
+      stats.textContent = "no observations yet — flag a target and wait for it to be heard";
+    }
+
+    // Auth banner — gated actions only enable when the operator
+    // confirmed authorization. Show a clickable nudge otherwise.
+    const banner = block.querySelector("[data-auth-banner]");
+    const dwell  = block.querySelector('[data-action="dwell"]');
+    const enumB  = block.querySelector('[data-action="enum"]');
+    const auth = sim.snapshot && sim.snapshot.auth_gate;
+    const authorized = !!(auth && auth.authorized);
+    if (banner) {
+      banner.innerHTML = authorized
+        ? `! authorized — scope: ${escapeHtml(auth.scope || "operator-acknowledged")}`
+        : `! active actions disabled — <a data-auth-link>acknowledge authorization</a>`;
+    }
+    if (dwell) dwell.disabled = !(authorized && kind === "net");
+    if (enumB) enumB.disabled = !(authorized && kind === "bt");
+  }
+
+  function drawSparkline(canvas, vals) {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!vals.length) return;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const span = (max - min) || 1;
+    ctx.strokeStyle = "#9be8b4";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    vals.forEach((v, i) => {
+      const x = (i / Math.max(1, vals.length - 1)) * (w - 2) + 1;
+      const y = h - 2 - ((v - min) / span) * (h - 4);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    // baseline
+    ctx.strokeStyle = "rgba(80,200,120,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(1, h - 1); ctx.lineTo(w - 1, h - 1);
+    ctx.stroke();
+  }
+
+  // The table re-renders every WS snapshot, so the detail row also gets
+  // rebuilt — debounce per-row so we don't fetch trail data 4 times/sec.
+  const detailRefreshTimers = new Map();
+  function scheduleDetailRefresh(kind, id, tr) {
+    const key = `${kind}:${id}`;
+    if (detailRefreshTimers.has(key)) return;
+    const t = setTimeout(() => {
+      detailRefreshTimers.delete(key);
+      refreshDetail(kind, id, tr);
+    }, 50);
+    detailRefreshTimers.set(key, t);
+  }
+
+  function toggleDetail(kind, id) {
+    if (openDetail.kind === kind && openDetail.id === id) {
+      openDetail.kind = null; openDetail.id = null;
+    } else {
+      openDetail.kind = kind; openDetail.id = id;
+    }
+    if (kind === "net") updateLiveNets(); else updateBtDevices();
+  }
+
+  function bindDetailActions(tbody, kind) {
+    if (!tbody) return;
+    tbody.addEventListener("click", async (ev) => {
+      const trDetail = ev.target.closest("tr.detail");
+      if (!trDetail) return;
+      const [k, id] = (trDetail.dataset.detailFor || "").split(":");
+      if (!id) return;
+      // Save notes
+      if (ev.target.matches('[data-action="save-notes"]')) {
+        const ta = trDetail.querySelector("[data-notes]");
+        const url = k === "net"
+          ? `/api/network/${encodeURIComponent(id)}/notes`
+          : `/api/bt/${encodeURIComponent(id)}/notes`;
+        try {
+          const r = await fetch(url, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ notes: ta.value || "" }),
+          });
+          if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+          pushLog("sys", `! notes saved  ${id}`);
+        } catch (e) {
+          pushLog("warn", `! notes save failed: ${e}`);
+        }
+        return;
+      }
+      // Auth banner link → open auth modal
+      if (ev.target.matches("[data-auth-link]")) {
+        ev.preventDefault();
+        showAuthGateModal();
+        return;
+      }
+      // PR-B placeholders — surface until backend lands
+      if (ev.target.matches('[data-action="dwell"]')) {
+        pushLog("sys", `! channel-dwell wiring lands in PR-B`);
+        return;
+      }
+      if (ev.target.matches('[data-action="enum"]')) {
+        pushLog("sys", `! GATT enumerate wiring lands in PR-B`);
+        return;
+      }
+    });
+  }
+  bindDetailActions(liveTbody, "net");
+  bindDetailActions(btTbody, "bt");
+
+  // ============================================================
+  //  Auth gate modal — operator confirms authorization for active
+  //  actions. Persists server-side; surfaced in /ws auth_gate.
+  // ============================================================
+  const authModal     = document.getElementById("auth-gate");
+  const authScopeIn   = document.getElementById("auth-scope");
+  const btnAuthCancel = document.getElementById("btn-auth-cancel");
+  const btnAuthConfirm = document.getElementById("btn-auth-confirm");
+  const btnAuthRevoke = document.getElementById("btn-auth-revoke");
+
+  function showAuthGateModal() {
+    if (!authModal) return;
+    authModal.hidden = false;
+    const auth = sim.snapshot && sim.snapshot.auth_gate;
+    if (authScopeIn) {
+      authScopeIn.value = (auth && auth.scope) || "";
+      authScopeIn.focus();
+    }
+  }
+  function hideAuthGateModal() { if (authModal) authModal.hidden = true; }
+
+  if (btnAuthCancel)  btnAuthCancel.addEventListener("click", hideAuthGateModal);
+  if (authModal)      authModal.addEventListener("click", (ev) => {
+    if (ev.target === authModal) hideAuthGateModal();
+  });
+  if (btnAuthConfirm) btnAuthConfirm.addEventListener("click", async () => {
+    const scope = (authScopeIn && authScopeIn.value || "").trim();
+    if (!scope) {
+      authScopeIn.focus();
+      return;
+    }
+    try {
+      const r = await fetch("/api/auth-gate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorized: true, scope }),
+      });
+      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      pushLog("sys", `! auth gate enabled  scope="${scope}"`);
+      hideAuthGateModal();
+      // Force a detail refresh so the buttons unlock immediately.
+      if (openDetail.kind && openDetail.id) {
+        const tr = document.querySelector(
+          `tr.detail[data-detail-for="${openDetail.kind}:${openDetail.id}"]`);
+        if (tr) refreshDetail(openDetail.kind, openDetail.id, tr);
+      }
+    } catch (e) { pushLog("warn", `! auth gate failed: ${e}`); }
+  });
+  if (btnAuthRevoke) btnAuthRevoke.addEventListener("click", async () => {
+    try {
+      await fetch("/api/auth-gate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorized: false }),
+      });
+      pushLog("warn", `! auth gate revoked`);
+      hideAuthGateModal();
+    } catch (e) { pushLog("warn", `! revoke failed: ${e}`); }
+  });
 
   // ============================================================
   //  Tab switching for the live panel
