@@ -18,6 +18,7 @@ from . import gps_serial
 from . import rtc as rtc_mod
 from . import sdr as sdr_mod
 from . import lora as lora_mod
+from . import bluetooth as bt_mod
 from .state import STATE
 
 
@@ -71,18 +72,79 @@ def _check_aio_board() -> None:
     if rtc_sync and not Path("/dev/rtc0").exists():
         issues.append("RTC sync enabled but /dev/rtc0 missing — wire the AIO RTC")
 
+    # Bluetooth — only when BT scanning is requested.
+    if os.environ.get("WARDRIVE_BT_ENABLED", "0") == "1":
+        dbus_sock = Path("/var/run/dbus/system_bus_socket")
+        if not dbus_sock.exists():
+            issues.append(
+                "BT enabled but DBus system bus socket missing — "
+                "mount /var/run/dbus into the container"
+            )
+        rfkill = Path("/sys/class/rfkill")
+        if rfkill.exists():
+            blocked = False
+            try:
+                for entry in rfkill.iterdir():
+                    type_p = entry / "type"
+                    soft_p = entry / "soft"
+                    if type_p.exists() and type_p.read_text().strip() == "bluetooth":
+                        if soft_p.exists() and soft_p.read_text().strip() == "1":
+                            blocked = True
+                            break
+            except OSError:
+                pass
+            if blocked:
+                issues.append("Bluetooth is rfkill soft-blocked — `rfkill unblock bluetooth`")
+
     if issues:
         msg = "AIO setup check: " + "; ".join(issues)
         log.warning(msg)
         STATE.status_msg = msg
     else:
-        log.info("AIO setup check: ok (iface=%s gps=%s rtc=%s)",
-                 iface or "--", gps_dev or "--", "on" if rtc_sync else "off")
+        log.info("AIO setup check: ok (iface=%s gps=%s rtc=%s bt=%s)",
+                 iface or "--", gps_dev or "--",
+                 "on" if rtc_sync else "off",
+                 "on" if os.environ.get("WARDRIVE_BT_ENABLED", "0") == "1" else "off")
+
+
+def _list_wireless_ifaces() -> list[dict]:
+    """Enumerate wireless network interfaces on the host.
+
+    Reads /sys/class/net for type=1 (ARPHRD_ETHER) entries that also
+    have a ``wireless/`` subdirectory — that's the kernel's reliable
+    way to identify wifi devices without shelling out. Falls back to
+    listing nothing if /sys isn't accessible (e.g. in odd CI envs).
+    """
+    out: list[dict] = []
+    base = Path("/sys/class/net")
+    if not base.exists():
+        return out
+    try:
+        for entry in sorted(base.iterdir()):
+            if (entry / "wireless").is_dir():
+                operstate = ""
+                try:
+                    operstate = (entry / "operstate").read_text().strip()
+                except OSError:
+                    pass
+                out.append({"name": entry.name, "operstate": operstate})
+    except OSError:
+        pass
+    return out
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    STATE.iface = os.environ.get("WARDRIVE_IFACE", "wlan1")
+    # Boot order for picking the wifi iface:
+    #   1. previously-saved selection in the SQLite settings table (so a
+    #      runtime change in the CONFIG modal survives restarts)
+    #   2. WARDRIVE_IFACE env var
+    #   3. default "wlan1" (uConsole + AIO build assumption)
+    saved_iface = STATE.get_setting("active_iface")
+    if saved_iface:
+        STATE.iface = saved_iface
+    else:
+        STATE.iface = os.environ.get("WARDRIVE_IFACE", "wlan1")
     log.info("starting wardrive_crew on iface=%s", STATE.iface)
     _check_aio_board()
     await rtc_mod.sync_rtc_at_startup()
@@ -92,6 +154,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(gps_serial.gps_serial_loop(), name="gps_serial"),
         asyncio.create_task(sdr_mod.sdr_loop(), name="sdr_loop"),
         asyncio.create_task(lora_mod.lora_loop(), name="lora_loop"),
+        asyncio.create_task(bt_mod.bt_loop(), name="bt_loop"),
     ]
     if os.environ.get("WARDRIVE_AUTO_MONITOR", "0") == "1":
         try:
@@ -224,6 +287,93 @@ def set_network_flags(bssid: str, body: NetworkFlagsIn) -> dict:
     }
 
 
+@app.get("/api/iface")
+def list_ifaces() -> dict:
+    """List host wireless interfaces and the current selection."""
+    ifaces = _list_wireless_ifaces()
+    current = STATE.iface or ""
+    # If the current iface is in env / saved settings but not actually
+    # present, surface that so the picker can show it as missing.
+    names = {i["name"] for i in ifaces}
+    return {
+        "current": current,
+        "current_present": current in names,
+        "interfaces": ifaces,
+    }
+
+
+class IfaceIn(BaseModel):
+    iface: str
+
+
+@app.put("/api/iface")
+def set_iface(body: IfaceIn) -> dict:
+    """Switch the active wifi interface. Refuses while monitor mode is
+    on so we don't orphan the monitor iface."""
+    name = (body.iface or "").strip()
+    if not name or len(name) > 32 or "/" in name:
+        raise HTTPException(status_code=400, detail="invalid interface name")
+    if STATE.monitor_on:
+        raise HTTPException(
+            status_code=409,
+            detail="disable monitor mode before switching interface",
+        )
+    available = {i["name"] for i in _list_wireless_ifaces()}
+    if available and name not in available:
+        raise HTTPException(
+            status_code=404,
+            detail=f"interface {name!r} not found among {sorted(available)}",
+        )
+    STATE.iface = name
+    STATE.set_setting("active_iface", name)
+    log.info("active iface switched to %s", name)
+    return {"ok": True, "iface": name}
+
+
+@app.get("/api/bt/devices")
+def bt_devices(limit: int = 500) -> JSONResponse:
+    cur = STATE.db.execute(
+        "SELECT mac, name, rssi, manufacturer, first_seen, last_seen, "
+        "lat, lon, whitelisted, targeted FROM bt_devices "
+        "ORDER BY last_seen DESC LIMIT ?",
+        (max(1, min(limit, 5000)),),
+    )
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    return JSONResponse(rows)
+
+
+class BtFlagsIn(BaseModel):
+    """Toggle per-device flags from the operator terminal. Either field
+    may be omitted to leave it unchanged."""
+    whitelisted: bool | None = None
+    targeted: bool | None = None
+
+
+@app.put("/api/bt/{mac}")
+def set_bt_flags(mac: str, body: BtFlagsIn) -> dict:
+    mac = (mac or "").lower().strip()
+    if not mac:
+        raise HTTPException(status_code=400, detail="mac required")
+    cur = STATE.db.execute("SELECT 1 FROM bt_devices WHERE mac=?", (mac,))
+    if cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail="mac not found")
+    if body.whitelisted is not None:
+        STATE.set_bt_whitelist(mac, bool(body.whitelisted))
+    if body.targeted is not None:
+        STATE.set_bt_target(mac, bool(body.targeted))
+    cur = STATE.db.execute(
+        "SELECT whitelisted, targeted FROM bt_devices WHERE mac=?", (mac,)
+    )
+    row = cur.fetchone()
+    return {
+        "ok": True,
+        "mac": mac,
+        "whitelisted": bool(row[0]),
+        "targeted": bool(row[1]),
+    }
+
+
 class WhitelistIn(BaseModel):
     bssid: str | None = None
     ssid: str | None = None
@@ -337,6 +487,19 @@ def _snapshot() -> dict:
             "tx_age_s": _age(STATE.lora_last_tx_ts),
             "rx_age_s": _age(STATE.lora_last_rx_ts),
         },
+        "bt": {
+            "active": STATE.bt_active,
+            "adapter": STATE.bt_adapter,
+            "last_scan_age_s": _age(STATE.bt_last_scan_ts),
+            "last_scan_new": STATE.bt_last_scan_new,
+            "last_scan_seen": STATE.bt_last_scan_seen,
+            "devices_total": STATE.bt_devices_total(),
+            "targets_total": STATE.bt_targets_total(),
+        },
+        "bt_active": STATE.bt_active,
+        "bt_devices_total": STATE.bt_devices_total(),
+        "bt_targets_total": STATE.bt_targets_total(),
+        "bt_visible": STATE.visible_bt_devices(limit=24),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,

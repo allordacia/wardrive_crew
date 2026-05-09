@@ -155,6 +155,39 @@ else
     info "no /dev/rtc0 — set WARDRIVE_RTC_SYNC=0 if your AIO has no RTC populated"
 fi
 
+# --- 6b. bluetooth (BLE) ----------------------------------------------------
+# bleak needs bluetoothd reachable over DBus; rfkill must not be soft-blocking
+# the radio. None of these are fatal — BT is opt-in via WARDRIVE_BT_ENABLED.
+if [[ -e /var/run/dbus/system_bus_socket ]]; then
+    ok "DBus system bus socket present (bleak/BlueZ)"
+else
+    fail "DBus system bus socket missing — install dbus on the host"
+fi
+if command -v rfkill >/dev/null 2>&1; then
+    if rfkill list bluetooth 2>/dev/null | grep -q "Soft blocked: yes"; then
+        warn "Bluetooth is rfkill soft-blocked"
+        if (( DRY_RUN == 0 )); then
+            sudo rfkill unblock bluetooth && ok "rfkill unblock bluetooth"
+        fi
+    else
+        ok "Bluetooth not rfkill-blocked"
+    fi
+else
+    info "rfkill not installed — skipping bluetooth block check"
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet bluetooth.service 2>/dev/null; then
+        ok "bluetoothd active"
+    else
+        warn "bluetoothd not active — \`sudo systemctl enable --now bluetooth\`"
+        if (( DRY_RUN == 0 )); then
+            sudo systemctl enable --now bluetooth.service \
+                && ok "started bluetooth.service" \
+                || warn "failed to start bluetooth.service"
+        fi
+    fi
+fi
+
 # --- 7. summary -------------------------------------------------------------
 cat <<EOF
 
