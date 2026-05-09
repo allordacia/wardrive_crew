@@ -138,16 +138,36 @@ async def _run(*cmd: str, timeout: float = 30.0) -> tuple[int, str, str]:
 # scan loop
 # ---------------------------------------------------------------------------
 
+_MISSING_IFACE_BACKOFF_S = 30.0
+
+
 async def scan_loop() -> None:
     log.info("scan loop started on %s every %.1fs", STATE.iface, SCAN_INTERVAL)
+    last_missing_log = ""  # so we don't spam the same warning every backoff cycle
     while True:
         await asyncio.sleep(SCAN_INTERVAL)
         if STATE.monitor_on:
             # iw scan doesn't work while in monitor mode; the monitor loop
             # is doing its own packet-driven discovery.
             continue
+        # If the configured iface vanished (e.g. AIO radio not enumerating
+        # so 'wlan1' isn't there), surface a clear, actionable message
+        # instead of spamming "command failed: No such device (-19)" every
+        # cycle, and back off the retry rate.
+        iface = (STATE.iface or "").strip()
+        if not iface or not Path(f"/sys/class/net/{iface}").exists():
+            present = _list_present_wifi_ifaces()
+            hint = f"present: {', '.join(present)}" if present else "no wireless ifaces present"
+            msg = f"iface {iface!r} missing — pick one in CONFIG ({hint})"
+            STATE.status_msg = msg
+            if msg != last_missing_log:
+                log.warning("%s", msg)
+                last_missing_log = msg
+            await asyncio.sleep(_MISSING_IFACE_BACKOFF_S - SCAN_INTERVAL)
+            continue
+        last_missing_log = ""  # reset so a future disappearance logs once again
         try:
-            rc, out, err = await _run("iw", "dev", STATE.iface, "scan", timeout=20)
+            rc, out, err = await _run("iw", "dev", iface, "scan", timeout=20)
         except FileNotFoundError:
             STATE.status_msg = "iw not installed"
             log.error("iw binary missing")
@@ -167,6 +187,20 @@ async def scan_loop() -> None:
         STATE.last_scan_seen = len(nets)
         STATE.last_scan_new = new
         STATE.status_msg = f"scan: {len(nets)} seen, +{new} new"
+
+
+def _list_present_wifi_ifaces() -> list[str]:
+    base = Path("/sys/class/net")
+    if not base.exists():
+        return []
+    out = []
+    try:
+        for entry in sorted(base.iterdir()):
+            if (entry / "wireless").is_dir():
+                out.append(entry.name)
+    except OSError:
+        pass
+    return out
 
 
 # ---------------------------------------------------------------------------
