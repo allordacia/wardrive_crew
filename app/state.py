@@ -172,6 +172,10 @@ class State:
     rtc_synced_ts: float = 0.0
     rtc_device: str = ""
     sdr_active: bool = False
+    # Last time the rtl_power sweep loop was actively touching the SDR
+    # dongle. Used by rtl_433_loop's dongle-grace check so the two
+    # loops don't race for the USB endpoint during a feature toggle.
+    sdr_last_active_ts: float = 0.0
     sdr_last_band: str = ""
     sdr_last_peaks: int = 0
     sdr_last_ts: float = 0.0
@@ -194,6 +198,9 @@ class State:
     rtl433_active: bool = False
     rtl433_cmd: str = ""
     rtl433_last_ts: float = 0.0
+    # Last time the rtl_433 subprocess was actively reading from the
+    # SDR dongle. Used by sdr_loop's dongle-grace check.
+    rtl433_last_active_ts: float = 0.0
     # tshark sidecar that captures STAs from the monitor iface. Only set
     # while monitor mode is on AND tshark is actively reading frames.
     wifi_clients_active: bool = False
