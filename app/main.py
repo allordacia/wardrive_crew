@@ -31,25 +31,60 @@ log = logging.getLogger("wardrive")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def _autodetect_preset() -> None:
-    """First-boot heuristic: if the AIO v2 hardware looks present and no
-    preset has been chosen yet, pick the safari preset (themed for off-grid)
-    so users running on a uConsole get a uConsole-flavoured scene by default.
+def _check_aio_board() -> None:
+    """Initial-setup verification for uConsole + Hackergadgets AIO board.
+
+    Probes the prerequisites the host-side `scripts/uconsole-aio-setup.sh`
+    is supposed to have established (UART freed for the GPS, GPS device
+    node present, RTC node present, declared wifi iface present). Each
+    failure becomes a WARNING in the log and a line on the operator
+    terminal's status panel via STATE.status_msg. Non-fatal: the app
+    still starts so the operator can see the diagnostics.
     """
-    if STATE.get_setting("scene_preset") is not None:
-        return
+    iface = (STATE.iface or "").strip()
     gps_dev = os.environ.get("WARDRIVE_GPS_DEVICE", "").strip()
-    has_aio_gps = bool(gps_dev) and Path(gps_dev).exists()
-    if has_aio_gps:
-        STATE.set_setting("scene_preset", "safari")
-        log.info("auto-selected 'safari' preset (AIO v2 GPS detected at %s)", gps_dev)
+    rtc_sync = os.environ.get("WARDRIVE_RTC_SYNC", "0") == "1"
+    issues: list[str] = []
+
+    # Wireless interface declared in env must actually exist.
+    if iface and not Path(f"/sys/class/net/{iface}").exists():
+        issues.append(f"wifi iface {iface!r} not present")
+
+    # GPS UART (only required when the env var is set).
+    if gps_dev:
+        if not Path(gps_dev).exists():
+            issues.append(f"GPS device {gps_dev!r} missing — run scripts/uconsole-aio-setup.sh")
+        else:
+            cmdline = Path("/boot/firmware/cmdline.txt")
+            if not cmdline.exists():
+                cmdline = Path("/boot/cmdline.txt")
+            try:
+                if cmdline.exists() and "console=serial0" in cmdline.read_text():
+                    issues.append(
+                        "kernel console is on serial0 — UART will fight us; "
+                        "run scripts/uconsole-aio-setup.sh and reboot"
+                    )
+            except OSError:
+                pass
+
+    # RTC node — only when sync is requested.
+    if rtc_sync and not Path("/dev/rtc0").exists():
+        issues.append("RTC sync enabled but /dev/rtc0 missing — wire the AIO RTC")
+
+    if issues:
+        msg = "AIO setup check: " + "; ".join(issues)
+        log.warning(msg)
+        STATE.status_msg = msg
+    else:
+        log.info("AIO setup check: ok (iface=%s gps=%s rtc=%s)",
+                 iface or "--", gps_dev or "--", "on" if rtc_sync else "off")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    STATE.iface = os.environ.get("WARDRIVE_IFACE", "wlan0")
+    STATE.iface = os.environ.get("WARDRIVE_IFACE", "wlan1")
     log.info("starting wardrive_crew on iface=%s", STATE.iface)
-    _autodetect_preset()
+    _check_aio_board()
     await rtc_mod.sync_rtc_at_startup()
     tasks = [
         asyncio.create_task(scanner.scan_loop(), name="scan_loop"),
@@ -150,12 +185,43 @@ async def monitor_off() -> dict:
 def networks(limit: int = 500) -> JSONResponse:
     cur = STATE.db.execute(
         "SELECT bssid, ssid, channel, signal, encryption, first_seen, last_seen, "
-        "lat, lon, whitelisted FROM networks ORDER BY last_seen DESC LIMIT ?",
+        "lat, lon, whitelisted, targeted FROM networks ORDER BY last_seen DESC LIMIT ?",
         (max(1, min(limit, 5000)),),
     )
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     return JSONResponse(rows)
+
+
+class NetworkFlagsIn(BaseModel):
+    """Toggle per-BSSID flags from the operator terminal. Either field may
+    be omitted to leave it unchanged."""
+    whitelisted: bool | None = None
+    targeted: bool | None = None
+
+
+@app.put("/api/network/{bssid}")
+def set_network_flags(bssid: str, body: NetworkFlagsIn) -> dict:
+    bssid = (bssid or "").lower().strip()
+    if not bssid:
+        raise HTTPException(status_code=400, detail="bssid required")
+    cur = STATE.db.execute("SELECT 1 FROM networks WHERE bssid=?", (bssid,))
+    if cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail="bssid not found")
+    if body.whitelisted is not None:
+        STATE.set_whitelist(bssid, bool(body.whitelisted))
+    if body.targeted is not None:
+        STATE.set_target(bssid, bool(body.targeted))
+    cur = STATE.db.execute(
+        "SELECT whitelisted, targeted FROM networks WHERE bssid=?", (bssid,)
+    )
+    row = cur.fetchone()
+    return {
+        "ok": True,
+        "bssid": bssid,
+        "whitelisted": bool(row[0]),
+        "targeted": bool(row[1]),
+    }
 
 
 class WhitelistIn(BaseModel):
@@ -182,53 +248,6 @@ def whitelist(item: WhitelistIn) -> dict:
 class WhitelistBulkIn(BaseModel):
     bssids: list[str] = Field(default_factory=list)
     ssids: list[str] = Field(default_factory=list)
-
-
-class PresetIn(BaseModel):
-    preset: str
-
-
-@app.get("/api/preset")
-def get_preset() -> dict:
-    """Returns the active scene preset id (vehicle + cast). The frontend
-    holds the registry of available presets; the backend just remembers
-    which one was chosen so it survives container restarts."""
-    return {"preset": STATE.get_setting("scene_preset", "classic")}
-
-
-@app.put("/api/preset")
-def set_preset(body: PresetIn) -> dict:
-    if not body.preset or len(body.preset) > 64:
-        raise HTTPException(status_code=400, detail="invalid preset id")
-    STATE.set_setting("scene_preset", body.preset)
-    return {"ok": True, "preset": body.preset}
-
-
-# The frontend ships two renderers: "lcd" (Game-&-Watch segments,
-# e-ink-friendly) and "sixteen" (GBA-style pixel art with the animals
-# acting as the radio status panel). This endpoint just persists the
-# user's choice; the frontend bootstrap dispatches.
-ALLOWED_RENDERERS = {"lcd", "sixteen"}
-
-
-class RendererIn(BaseModel):
-    renderer: str
-
-
-@app.get("/api/renderer")
-def get_renderer() -> dict:
-    return {"renderer": STATE.get_setting("active_renderer", "lcd")}
-
-
-@app.put("/api/renderer")
-def set_renderer(body: RendererIn) -> dict:
-    if body.renderer not in ALLOWED_RENDERERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"renderer must be one of {sorted(ALLOWED_RENDERERS)}",
-        )
-    STATE.set_setting("active_renderer", body.renderer)
-    return {"ok": True, "renderer": body.renderer}
 
 
 @app.put("/api/whitelist")
@@ -278,6 +297,8 @@ def _snapshot() -> dict:
         "monitor_on": STATE.monitor_on,
         "pcap_on": STATE.pcap_on,
         "networks_total": STATE.total_networks(),
+        "targets_total": STATE.total_targets(),
+        "visible_nets": STATE.visible_networks(limit=24),
         "packets_total": STATE.total_packets(),
         "pcap_bytes_total": STATE.total_pcap_bytes(),
         "rf_signals_total": STATE.rf_signals_total,

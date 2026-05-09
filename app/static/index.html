@@ -3,125 +3,143 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>WARDRIVE CREW</title>
+<title>WARDRIVE // TERMINAL</title>
 <link rel="stylesheet" href="/static/style.css" />
 </head>
-<body data-active-renderer="lcd">
-  <div id="bezel">
-    <div id="brand">
-      <span class="brand-mark">WARDRIVE CREW</span>
-      <span class="brand-sub" data-show-when-renderer="lcd">LCD-77 / Game &amp; Sniff</span>
-      <span class="brand-sub" data-show-when-renderer="sixteen">16-BIT / Crew Cab</span>
+<body>
+  <div id="crt">
+    <div id="scanlines" aria-hidden="true"></div>
+    <div id="vignette" aria-hidden="true"></div>
+
+    <header id="topbar">
+      <span class="logo">WARDRIVE//TERMINAL</span>
+      <span class="topbar-spacer"></span>
+      <span class="topbar-tag" id="tb-host">HOST: --</span>
+      <span class="topbar-tag" id="tb-uptime">T+00:00:00</span>
+      <span class="topbar-tag" id="tb-link">LINK: ?</span>
+    </header>
+
+    <div id="statusline">
+      <span class="stat" data-flag="mon">[ MON ]</span>
+      <span class="stat" data-flag="pcap">[ PCAP ]</span>
+      <span class="stat" data-flag="gps">[ GPS ]</span>
+      <span class="stat" data-flag="rtc">[ RTC ]</span>
+      <span class="stat" data-flag="sdr">[ SDR ]</span>
+      <span class="stat" data-flag="lora">[ LORA ]</span>
+      <span class="stat alert" data-flag="warn">[ !! ]</span>
     </div>
 
-    <div id="lcd">
-      <canvas id="screen" width="640" height="360" aria-label="game screen"></canvas>
-      <div id="lcd-overlay" data-show-when-renderer="lcd">
-        <div class="ovr-row top">
-          <span data-on="net">NET</span>
-          <span data-on="pcap">PCAP</span>
-          <span data-on="mon">MON</span>
-          <span data-on="gps">GPS</span>
-          <span data-on="rtc">RTC</span>
-          <span data-on="sdr">SDR</span>
-          <span data-on="lora">LORA</span>
-          <span data-on="fleet" class="ovr-fleet">FLEET 0</span>
+    <main id="grid">
+      <section class="panel panel-scope">
+        <div class="panel-head">
+          <span class="ph-title">// SCOPE.SWEEP</span>
+          <span class="ph-meta" id="scope-meta">--</span>
         </div>
-        <div class="ovr-row bottom">
-          <span data-on="lo">LO</span>
-          <span data-on="mid">MID</span>
-          <span data-on="hi">HI</span>
-          <span data-on="warn">!!</span>
+        <canvas id="screen" width="640" height="360" aria-label="scope canvas"></canvas>
+      </section>
+
+      <section class="panel panel-readout">
+        <div class="panel-head"><span class="ph-title">// METRICS</span></div>
+        <div class="readouts">
+          <div class="readout">
+            <div class="r-label">NET</div>
+            <div class="r-val" id="seg-networks">000000</div>
+          </div>
+          <div class="readout">
+            <div class="r-label">PKT</div>
+            <div class="r-val" id="seg-packets">00000000</div>
+          </div>
+          <div class="readout">
+            <div class="r-label">VEL</div>
+            <div class="r-val accent" id="seg-speed">000</div>
+          </div>
         </div>
-      </div>
-    </div>
+      </section>
 
-    <div id="readouts" data-show-when-renderer="lcd">
-      <div class="readout">
-        <div class="label">NETWORKS</div>
-        <div class="seg" id="seg-networks">000000</div>
-      </div>
-      <div class="readout">
-        <div class="label">PACKETS</div>
-        <div class="seg" id="seg-packets">00000000</div>
-      </div>
-      <div class="readout">
-        <div class="label">MPH</div>
-        <div class="seg big" id="seg-speed">000</div>
-      </div>
-    </div>
+      <section class="panel panel-radios">
+        <div class="panel-head"><span class="ph-title">// RADIO BUS</span></div>
+        <div class="radio-list">
+          <div class="radio-card" data-radio="wifi">
+            <div class="rc-head"><span class="rc-name">WIFI</span><span class="rc-state">--</span></div>
+            <div class="rc-line">--</div>
+            <div class="rc-line muted">--</div>
+          </div>
+          <div class="radio-card" data-radio="gps">
+            <div class="rc-head"><span class="rc-name">GPS</span><span class="rc-state">--</span></div>
+            <div class="rc-line">--</div>
+            <div class="rc-line muted">--</div>
+          </div>
+          <div class="radio-card" data-radio="rtc">
+            <div class="rc-head"><span class="rc-name">RTC</span><span class="rc-state">--</span></div>
+            <div class="rc-line">--</div>
+            <div class="rc-line muted">--</div>
+          </div>
+          <div class="radio-card" data-radio="sdr">
+            <div class="rc-head"><span class="rc-name">SDR</span><span class="rc-state">--</span></div>
+            <div class="rc-line">--</div>
+            <div class="rc-line muted">--</div>
+          </div>
+          <div class="radio-card" data-radio="lora">
+            <div class="rc-head"><span class="rc-name">LORA</span><span class="rc-state">--</span></div>
+            <div class="rc-line">--</div>
+            <div class="rc-line muted">--</div>
+          </div>
+        </div>
+      </section>
 
-    <div id="radios" data-show-when-renderer="lcd">
-      <div class="radio-card" data-radio="wifi">
-        <div class="rc-head"><span class="rc-name">WIFI</span><span class="rc-state">—</span></div>
-        <div class="rc-line">—</div>
-        <div class="rc-line muted">—</div>
-      </div>
-      <div class="radio-card" data-radio="gps">
-        <div class="rc-head"><span class="rc-name">GPS</span><span class="rc-state">—</span></div>
-        <div class="rc-line">—</div>
-        <div class="rc-line muted">—</div>
-      </div>
-      <div class="radio-card" data-radio="rtc">
-        <div class="rc-head"><span class="rc-name">RTC</span><span class="rc-state">—</span></div>
-        <div class="rc-line">—</div>
-        <div class="rc-line muted">—</div>
-      </div>
-      <div class="radio-card" data-radio="sdr">
-        <div class="rc-head"><span class="rc-name">SDR</span><span class="rc-state">—</span></div>
-        <div class="rc-line">—</div>
-        <div class="rc-line muted">—</div>
-      </div>
-      <div class="radio-card" data-radio="lora">
-        <div class="rc-head"><span class="rc-name">LORA</span><span class="rc-state">—</span></div>
-        <div class="rc-line">—</div>
-        <div class="rc-line muted">—</div>
-      </div>
-    </div>
+      <section class="panel panel-live">
+        <div class="panel-head">
+          <span class="ph-title">// LIVE.NETS</span>
+          <span class="ph-meta">
+            <span id="live-meta">--</span>
+            <span class="legend"><span class="lg lg-wl">[*] WL</span> <span class="lg lg-tg">[!] TGT</span></span>
+          </span>
+        </div>
+        <div class="live-wrap">
+          <table class="live-nets">
+            <thead>
+              <tr>
+                <th class="c-act">FLAG</th>
+                <th class="c-ssid">SSID</th>
+                <th class="c-bssid">BSSID</th>
+                <th class="c-ch">CH</th>
+                <th class="c-sig">SIG</th>
+                <th class="c-enc">ENC</th>
+                <th class="c-age">AGE</th>
+              </tr>
+            </thead>
+            <tbody id="live-tbody">
+              <tr class="empty"><td colspan="7">// awaiting scan...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre id="log" class="ticker" aria-live="polite"></pre>
+      </section>
+    </main>
 
-    <div id="controls">
-      <button id="btn-monitor" class="btn">MONITOR: OFF</button>
-      <button id="btn-gps" class="btn">GPS: OFF</button>
-      <button id="btn-settings" class="btn">SETTINGS</button>
-      <span id="status">idle</span>
-    </div>
+    <footer id="controls">
+      <button id="btn-monitor" class="btn">[F1] MONITOR: OFF</button>
+      <button id="btn-gps" class="btn">[F2] GPS: OFF</button>
+      <button id="btn-settings" class="btn">[F3] CONFIG</button>
+      <span id="status" class="status-msg">&gt; idle</span>
+      <span class="cursor" aria-hidden="true">&#9608;</span>
+    </footer>
   </div>
 
   <div id="settings" class="modal" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <span>SETTINGS</span>
-        <button id="btn-close-settings" class="btn small">CLOSE</button>
+        <span>// CONFIG :: WHITELIST</span>
+        <button id="btn-close-settings" class="btn small">[ESC] CLOSE</button>
       </div>
       <div class="modal-body">
         <div class="settings-section">
-          <div class="settings-section-head">DISPLAY &middot; pick the renderer</div>
+          <div class="settings-section-head">&gt; tick networks to exclude from score</div>
           <div class="settings-toolbar">
-            <label for="renderer-select" class="lbl">RENDERER</label>
-            <select id="renderer-select">
-              <option value="lcd">LCD (Game &amp; Watch)</option>
-              <option value="sixteen">16-bit (GBA-style)</option>
-            </select>
-            <span class="muted">LCD is e-ink-friendly. 16-bit shows more live detail.</span>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-head">CREW &middot; pick the vehicle &amp; cast</div>
-          <div class="settings-toolbar">
-            <label for="preset-select" class="lbl">PRESET</label>
-            <select id="preset-select"></select>
-            <span id="preset-info" class="muted"></span>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-head">WHITELIST &middot; tick networks to exclude from score</div>
-          <div class="settings-toolbar">
-            <input id="filter" placeholder="filter ssid / bssid…" />
+            <input id="filter" placeholder="filter ssid / bssid..." />
             <span id="wl-count">0 whitelisted</span>
-            <button id="btn-refresh" class="btn small">REFRESH</button>
-            <button id="btn-save-wl" class="btn small primary">SAVE</button>
+            <button id="btn-refresh" class="btn small">[R] REFRESH</button>
+            <button id="btn-save-wl" class="btn small primary">[S] SAVE</button>
           </div>
           <div class="net-list-wrap">
             <table class="net-list">
@@ -136,10 +154,6 @@
     </div>
   </div>
 
-  <script src="/static/sprites/animals.js"></script>
-  <script src="/static/sprites/vehicles.js"></script>
-  <script src="/static/renderer-sixteen.js"></script>
-  <script src="/static/game.js"></script>
-  <script src="/static/renderer-bootstrap.js"></script>
+  <script src="/static/terminal.js"></script>
 </body>
 </html>

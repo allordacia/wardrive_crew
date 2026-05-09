@@ -28,7 +28,8 @@ def _connect() -> sqlite3.Connection:
             last_seen REAL,
             lat REAL,
             lon REAL,
-            whitelisted INTEGER NOT NULL DEFAULT 0
+            whitelisted INTEGER NOT NULL DEFAULT 0,
+            targeted INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS counters (
             name TEXT PRIMARY KEY,
@@ -42,11 +43,13 @@ def _connect() -> sqlite3.Connection:
         INSERT OR IGNORE INTO counters(name, value) VALUES ('pcap_bytes', 0);
         """
     )
-    # Migration for dbs created before the whitelisted column existed.
+    # Migration for dbs created before the whitelisted / targeted columns existed.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(networks)").fetchall()}
     if "whitelisted" not in cols:
         conn.execute("ALTER TABLE networks ADD COLUMN whitelisted INTEGER NOT NULL DEFAULT 0")
-        conn.commit()
+    if "targeted" not in cols:
+        conn.execute("ALTER TABLE networks ADD COLUMN targeted INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
     return conn
 
 
@@ -131,7 +134,42 @@ class State:
         self.db.commit()
         return cur.rowcount
 
-    # ---- generic key/value settings (used by the scene preset picker) ----
+    def set_target(self, bssid: str, on: bool) -> bool:
+        """Mark a BSSID as a 'target' (operator focus). Independent of the
+        whitelist; surfaced in the operator terminal so the user can build a
+        focused list (e.g. for monitor-mode capture or follow-up)."""
+        cur = self.db.execute(
+            "UPDATE networks SET targeted=? WHERE bssid=?",
+            (1 if on else 0, bssid),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def visible_networks(self, limit: int = 24, max_age_s: float = 600.0) -> list[dict]:
+        """Recently-seen BSSIDs for the live panel on the terminal. Sorted
+        by signal strength (strongest first), tie-broken by last_seen."""
+        cutoff = time.time() - max_age_s
+        cur = self.db.execute(
+            "SELECT bssid, ssid, channel, signal, encryption, last_seen, "
+            "whitelisted, targeted "
+            "FROM networks WHERE last_seen >= ? "
+            "ORDER BY COALESCE(signal, -999) DESC, last_seen DESC LIMIT ?",
+            (cutoff, max(1, min(limit, 200))),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append({
+                "bssid": r[0], "ssid": r[1], "channel": r[2], "signal": r[3],
+                "encryption": r[4], "last_seen": r[5],
+                "whitelisted": bool(r[6]), "targeted": bool(r[7]),
+            })
+        return out
+
+    def total_targets(self) -> int:
+        cur = self.db.execute("SELECT COUNT(*) FROM networks WHERE targeted=1")
+        return int(cur.fetchone()[0])
+
+    # ---- generic key/value settings ----
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         cur = self.db.execute("SELECT value FROM settings WHERE key=?", (key,))
         row = cur.fetchone()
