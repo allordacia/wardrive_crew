@@ -53,6 +53,25 @@ def _connect() -> sqlite3.Connection:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        -- STA / client side of wifi monitor mode. Each row is one
+        -- 802.11 management-frame source MAC (probe-req / assoc-req /
+        -- reassoc-req). probed_ssids is a comma-separated list of
+        -- distinct SSIDs the client has asked for, capped to keep the
+        -- column small.
+        CREATE TABLE IF NOT EXISTS wifi_clients (
+            mac TEXT PRIMARY KEY,
+            is_random INTEGER NOT NULL DEFAULT 0,
+            last_signal INTEGER,
+            first_seen REAL NOT NULL,
+            last_seen REAL NOT NULL,
+            probe_count INTEGER NOT NULL DEFAULT 0,
+            probed_ssids TEXT NOT NULL DEFAULT '',
+            last_subtype INTEGER,
+            lat REAL,
+            lon REAL,
+            whitelisted INTEGER NOT NULL DEFAULT 0,
+            targeted INTEGER NOT NULL DEFAULT 0
+        );
         -- Consumer-device decodes from rtl_433. Each row is one logical
         -- device (rtl_433 model+id pair); count tracks how many packets
         -- we've seen, last_payload is the most recent JSON line.
@@ -160,6 +179,9 @@ class State:
     rtl433_active: bool = False
     rtl433_cmd: str = ""
     rtl433_last_ts: float = 0.0
+    # tshark sidecar that captures STAs from the monitor iface. Only set
+    # while monitor mode is on AND tshark is actively reading frames.
+    wifi_clients_active: bool = False
 
     def total_networks(self) -> int:
         cur = self.db.execute(
@@ -438,6 +460,111 @@ class State:
             "summary": r[9] or "", "last_payload": r[10] or "",
             "whitelisted": bool(r[11]), "targeted": bool(r[12]),
         }
+
+    # ---- wifi STA (client) helpers ----
+    # Per-STA probed_ssids string is capped at this many entries so a
+    # phone wandering past 30 hotel networks doesn't bloat the row.
+    PROBED_SSIDS_KEEP = 16
+
+    def add_wifi_client(
+        self,
+        mac: str,
+        ssid_probed: str,
+        subtype: Optional[int],
+        signal: Optional[int],
+        is_random: bool,
+    ) -> bool:
+        """Record one observed STA frame. Merges the SSID into the
+        client's probed_ssids list (deduped, capped). Returns True if
+        the STA was new this call."""
+        mac = (mac or "").lower()
+        if not mac:
+            return False
+        now = time.time()
+        lat = self.gps.lat if self.gps.have_fix else None
+        lon = self.gps.lon if self.gps.have_fix else None
+        cur = self.db.execute("SELECT probed_ssids FROM wifi_clients WHERE mac=?", (mac,))
+        row = cur.fetchone()
+        new = row is None
+        if new:
+            ssids = ssid_probed if ssid_probed else ""
+            self.db.execute(
+                "INSERT INTO wifi_clients(mac, is_random, last_signal, "
+                "first_seen, last_seen, probe_count, probed_ssids, "
+                "last_subtype, lat, lon) VALUES (?,?,?,?,?,1,?,?,?,?)",
+                (mac, 1 if is_random else 0, signal, now, now,
+                 ssids, subtype, lat, lon),
+            )
+        else:
+            existing = (row[0] or "")
+            if ssid_probed:
+                parts = [s for s in existing.split(",") if s]
+                if ssid_probed not in parts:
+                    parts.append(ssid_probed)
+                    parts = parts[-self.PROBED_SSIDS_KEEP:]
+                merged = ",".join(parts)
+            else:
+                merged = existing
+            self.db.execute(
+                "UPDATE wifi_clients SET "
+                "last_signal=COALESCE(?, last_signal), last_seen=?, "
+                "probe_count=probe_count+1, probed_ssids=?, "
+                "last_subtype=COALESCE(?, last_subtype), "
+                "lat=COALESCE(?, lat), lon=COALESCE(?, lon) "
+                "WHERE mac=?",
+                (signal, now, merged, subtype, lat, lon, mac),
+            )
+        self.db.commit()
+        return new
+
+    def visible_wifi_clients(self, limit: int = 24, max_age_s: float = 600.0) -> list[dict]:
+        cutoff = time.time() - max_age_s
+        cur = self.db.execute(
+            "SELECT mac, is_random, last_signal, last_seen, probe_count, "
+            "probed_ssids, last_subtype, whitelisted, targeted "
+            "FROM wifi_clients WHERE last_seen >= ? "
+            "ORDER BY last_seen DESC LIMIT ?",
+            (cutoff, max(1, min(limit, 200))),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append({
+                "mac": r[0], "is_random": bool(r[1]),
+                "last_signal": r[2], "last_seen": r[3],
+                "probe_count": r[4],
+                "probed_ssids": [s for s in (r[5] or "").split(",") if s],
+                "last_subtype": r[6],
+                "whitelisted": bool(r[7]), "targeted": bool(r[8]),
+            })
+        return out
+
+    def wifi_clients_total(self) -> int:
+        cur = self.db.execute(
+            "SELECT COUNT(*) FROM wifi_clients WHERE whitelisted=0"
+        )
+        return int(cur.fetchone()[0])
+
+    def wifi_client_targets_total(self) -> int:
+        cur = self.db.execute(
+            "SELECT COUNT(*) FROM wifi_clients WHERE targeted=1"
+        )
+        return int(cur.fetchone()[0])
+
+    def set_wifi_client_whitelist(self, mac: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE wifi_clients SET whitelisted=? WHERE mac=?",
+            (1 if on else 0, (mac or "").lower()),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def set_wifi_client_target(self, mac: str, on: bool) -> bool:
+        cur = self.db.execute(
+            "UPDATE wifi_clients SET targeted=? WHERE mac=?",
+            (1 if on else 0, (mac or "").lower()),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
 
     def bt_visible_count(self, max_age_s: float = 30.0) -> int:
         cutoff = time.time() - max_age_s

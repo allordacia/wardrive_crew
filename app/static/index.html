@@ -96,6 +96,7 @@
       <section class="panel panel-live">
         <div class="panel-tabs">
           <button class="tab active" data-tab="nets">// LIVE.NETS</button>
+          <button class="tab" data-tab="clients">// WIFI.CLIENTS</button>
           <button class="tab" data-tab="bt">// BT.DEVICES</button>
           <button class="tab" data-tab="rf">// RF.DEVICES</button>
           <span class="tab-meta">
@@ -137,6 +138,25 @@
             </thead>
             <tbody id="bt-tbody">
               <tr class="empty"><td colspan="6">// awaiting BT scan...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="live-wrap" data-tab-pane="clients" hidden>
+          <table class="live-nets">
+            <thead>
+              <tr>
+                <th class="c-act">FLAG</th>
+                <th class="c-ssid">PROBED</th>
+                <th class="c-bssid">MAC</th>
+                <th class="c-ch">RAND</th>
+                <th class="c-sig">RSSI</th>
+                <th class="c-enc">N</th>
+                <th class="c-age">AGE</th>
+              </tr>
+            </thead>
+            <tbody id="clients-tbody">
+              <tr class="empty"><td colspan="7">// monitor mode off</td></tr>
             </tbody>
           </table>
         </div>

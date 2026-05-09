@@ -18,6 +18,7 @@ from . import gps_serial
 from . import rtc as rtc_mod
 from . import sdr as sdr_mod
 from . import rtl_433 as rtl433_mod
+from . import wifi_clients as wifi_clients_mod
 from . import lora as lora_mod
 from . import bluetooth as bt_mod
 from .state import STATE
@@ -155,6 +156,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(gps_serial.gps_serial_loop(), name="gps_serial"),
         asyncio.create_task(lora_mod.lora_loop(), name="lora_loop"),
         asyncio.create_task(bt_mod.bt_loop(), name="bt_loop"),
+        asyncio.create_task(wifi_clients_mod.wifi_clients_loop(), name="wifi_clients"),
     ]
     # rtl_433 and rtl_power both need the SDR dongle and can't share it.
     # When both env flags are 1, prefer rtl_433 — it gives device decodes
@@ -433,6 +435,55 @@ def rf_detail(key: str) -> dict:
     return detail
 
 
+# ---------------------------------------------------------------------------
+# Wifi STAs / clients (tshark sidecar)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/clients")
+def list_wifi_clients(limit: int = 500) -> JSONResponse:
+    cur = STATE.db.execute(
+        "SELECT mac, is_random, last_signal, first_seen, last_seen, "
+        "probe_count, probed_ssids, last_subtype, lat, lon, "
+        "whitelisted, targeted FROM wifi_clients "
+        "ORDER BY last_seen DESC LIMIT ?",
+        (max(1, min(limit, 5000)),),
+    )
+    cols = [d[0] for d in cur.description]
+    rows = []
+    for r in cur.fetchall():
+        d = dict(zip(cols, r))
+        d["probed_ssids"] = [s for s in (d["probed_ssids"] or "").split(",") if s]
+        rows.append(d)
+    return JSONResponse(rows)
+
+
+class WifiClientFlagsIn(BaseModel):
+    whitelisted: bool | None = None
+    targeted: bool | None = None
+
+
+@app.put("/api/clients/{mac}")
+def set_wifi_client_flags(mac: str, body: WifiClientFlagsIn) -> dict:
+    mac = (mac or "").lower().strip()
+    if not mac:
+        raise HTTPException(status_code=400, detail="mac required")
+    cur = STATE.db.execute("SELECT 1 FROM wifi_clients WHERE mac=?", (mac,))
+    if cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail="client not found")
+    if body.whitelisted is not None:
+        STATE.set_wifi_client_whitelist(mac, bool(body.whitelisted))
+    if body.targeted is not None:
+        STATE.set_wifi_client_target(mac, bool(body.targeted))
+    cur = STATE.db.execute(
+        "SELECT whitelisted, targeted FROM wifi_clients WHERE mac=?", (mac,)
+    )
+    row = cur.fetchone()
+    return {
+        "ok": True, "mac": mac,
+        "whitelisted": bool(row[0]), "targeted": bool(row[1]),
+    }
+
+
 class WhitelistIn(BaseModel):
     bssid: str | None = None
     ssid: str | None = None
@@ -571,6 +622,10 @@ def _snapshot() -> dict:
         "rf_devices_total": STATE.rf_devices_total(),
         "rf_targets_total": STATE.rf_targets_total(),
         "rf_visible": STATE.visible_rf_devices(limit=24),
+        "wifi_clients_active": STATE.wifi_clients_active,
+        "wifi_clients_total": STATE.wifi_clients_total(),
+        "wifi_client_targets_total": STATE.wifi_client_targets_total(),
+        "wifi_clients_visible": STATE.visible_wifi_clients(limit=24),
         "rtc_synced": STATE.rtc_synced,
         "sdr_active": STATE.sdr_active,
         "lora_active": STATE.lora_active,
