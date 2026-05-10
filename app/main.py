@@ -20,6 +20,7 @@ from . import sdr as sdr_mod
 from . import rtl_433 as rtl433_mod
 from . import wifi_clients as wifi_clients_mod
 from . import features as features_mod
+from . import wigle as wigle_mod
 from . import lora as lora_mod
 from . import bluetooth as bt_mod
 from .state import STATE
@@ -525,6 +526,68 @@ def backup_db() -> dict:
     size = dst.stat().st_size if dst.exists() else 0
     log.info("backup: %s (%d bytes)", dst, size)
     return {"ok": True, "path": str(dst), "bytes": size}
+
+
+# ---------------------------------------------------------------------------
+# Wigle.net upload (lives inside the debriefing flow)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/wigle/status")
+def wigle_status() -> dict:
+    """Report whether creds are configured + the donate flag. The token
+    itself is never echoed back; we only say whether one is on file."""
+    name, token = wigle_mod.get_credentials()
+    return {
+        "configured": bool(name and token),
+        "api_name": name,                    # safe to surface
+        "has_token": bool(token),
+        "donate": wigle_mod.get_donate(),
+    }
+
+
+class WigleCredsIn(BaseModel):
+    api_name: str
+    api_token: str
+    donate: bool = False
+
+
+@app.put("/api/wigle/credentials")
+def wigle_set_creds(body: WigleCredsIn) -> dict:
+    wigle_mod.set_credentials(body.api_name, body.api_token)
+    wigle_mod.set_donate(body.donate)
+    log.info("wigle: credentials updated for api_name=%r", body.api_name)
+    return wigle_status()
+
+
+@app.get("/api/wigle/preview")
+def wigle_preview(mission_id: int) -> dict:
+    """Render the CSV without uploading — handy for sanity-checking
+    what we'd send before hitting the network."""
+    try:
+        csv_text, n = wigle_mod.build_csv(mission_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"rows": n, "bytes": len(csv_text.encode("utf-8")), "csv": csv_text}
+
+
+@app.post("/api/wigle/upload")
+def wigle_upload(mission_id: int) -> dict:
+    """Upload the named mission's wifi observations to Wigle. Persists
+    timestamp + (truncated) response on the missions row regardless of
+    success."""
+    if not wigle_mod.credentials_present():
+        raise HTTPException(
+            status_code=400,
+            detail="wigle credentials not configured; set in CONFIG -> WIGLE",
+        )
+    try:
+        result = wigle_mod.upload(mission_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
+
 
 
 @app.get("/api/clients")

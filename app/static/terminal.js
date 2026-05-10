@@ -1272,6 +1272,72 @@
   }
 
   // ============================================================
+  //  Wigle.net credentials (CONFIG modal)
+  //  The token is never echoed back from the server — we only get
+  //  has_token: bool. Operator types it once; subsequent loads show
+  //  a placeholder indicating "(saved)".
+  // ============================================================
+  const wigleName   = document.getElementById("wigle-name");
+  const wigleToken  = document.getElementById("wigle-token");
+  const wigleDonate = document.getElementById("wigle-donate");
+  const wigleStat   = document.getElementById("wigle-status");
+  const btnWigleSave = document.getElementById("btn-wigle-save");
+
+  let wigleStatusCache = null;
+
+  async function loadWigleStatus() {
+    if (!wigleStat) return;
+    try {
+      const r = await fetch("/api/wigle/status");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      wigleStatusCache = j;
+      if (wigleName)   wigleName.value = j.api_name || "";
+      if (wigleDonate) wigleDonate.checked = !!j.donate;
+      if (wigleToken)  wigleToken.placeholder = j.has_token ? "(saved — type to replace)" : "(unset)";
+      wigleStat.textContent = j.configured ? "// configured" : "// not configured";
+      wigleStat.style.color = j.configured ? "var(--ink)" : "var(--ink-faint)";
+    } catch (e) {
+      wigleStat.textContent = `! ${e}`;
+    }
+  }
+  if (btnWigleSave) {
+    btnWigleSave.addEventListener("click", async () => {
+      btnWigleSave.disabled = true;
+      try {
+        const body = {
+          api_name:  (wigleName  && wigleName.value  || "").trim(),
+          api_token: (wigleToken && wigleToken.value || "").trim(),
+          donate:    !!(wigleDonate && wigleDonate.checked),
+        };
+        if (!body.api_name) throw new Error("api name required");
+        // Server never echoes the saved token, so we can't silently
+        // preserve it on a save that left the field blank — confirm
+        // before clearing.
+        if (!body.api_token && wigleStatusCache && wigleStatusCache.has_token) {
+          if (!confirm("Token field is empty. Save will CLEAR the existing token. Continue?")) {
+            btnWigleSave.disabled = false;
+            return;
+          }
+        }
+        const r = await fetch("/api/wigle/credentials", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+        if (wigleToken) wigleToken.value = "";
+        await loadWigleStatus();
+        pushLog("sys", `! wigle credentials saved (${body.api_name})`);
+      } catch (e) {
+        pushLog("warn", `! wigle save failed: ${e}`);
+      } finally {
+        btnWigleSave.disabled = false;
+      }
+    });
+  }
+
+  // ============================================================
   //  Wifi interface picker (CONFIG modal)
   // ============================================================
   const ifaceSelect = document.getElementById("iface-select");
@@ -1347,7 +1413,7 @@
 
   btnSettings.addEventListener("click", async () => {
     modal.hidden = false;
-    await Promise.all([loadIfaces(), loadFeatures()]);
+    await Promise.all([loadIfaces(), loadFeatures(), loadWigleStatus()]);
   });
   btnCloseSettings.addEventListener("click", () => { modal.hidden = true; });
   modal.addEventListener("click", (ev) => {
@@ -1412,6 +1478,7 @@
   const btnMEnd      = document.getElementById("btn-mission-end");
   const btnMDismiss  = document.getElementById("btn-mission-dismiss");
   const btnMBackup   = document.getElementById("btn-mission-backup");
+  const btnMWigle    = document.getElementById("btn-mission-wigle");
   const missionLabel = document.getElementById("mission-label");
   const missionTitle = document.getElementById("mission-modal-title");
   const paneIdle     = document.getElementById("mission-idle");
@@ -1491,6 +1558,9 @@
           <tr><td>new bt devices</td><td>${summary.new_bt_devices || 0}</td></tr>
           <tr><td>new rf devices</td><td>${summary.new_rf_devices || 0}</td></tr>
           <tr><td>label</td><td>${escapeHtml(m.label || '(none)')}</td></tr>
+          <tr><td>wigle</td><td>${m.wigle_uploaded_at
+              ? `uploaded ${new Date(m.wigle_uploaded_at*1000).toLocaleString()}`
+              : '<span style="color: var(--ink-faint);">not uploaded</span>'}</td></tr>
         </table>
       `;
     }
@@ -1587,6 +1657,47 @@
       pushLog("warn", `! backup failed: ${e}`);
     } finally {
       btnMBackup.disabled = false;
+    }
+  });
+
+  if (btnMWigle) btnMWigle.addEventListener("click", async () => {
+    const m = sim.mission || {};
+    if (!m.id) {
+      if (debriefRes) debriefRes.textContent = "! no mission to upload";
+      return;
+    }
+    btnMWigle.disabled = true;
+    if (debriefRes) debriefRes.textContent = "wigle upload in progress...";
+    try {
+      const r = await fetch(
+        `/api/wigle/upload?mission_id=${encodeURIComponent(m.id)}`,
+        { method: "POST" },
+      );
+      const j = await r.json();
+      if (!r.ok) {
+        const detail = j && (j.detail || j.error) ? (j.detail || j.error) : `HTTP ${r.status}`;
+        throw new Error(detail);
+      }
+      const summary = (j.response && typeof j.response === "object")
+        ? (j.response.message || JSON.stringify(j.response))
+        : (j.response || "ok");
+      if (debriefRes) {
+        debriefRes.textContent = `wigle ok :: ${j.rows} rows :: ${summary}`;
+      }
+      pushLog("sys", `! wigle upload mission=${m.id} rows=${j.rows} status=${j.status}`);
+      // Refresh the mission state so the timestamp appears.
+      try {
+        const r2 = await fetch("/api/mission/current");
+        if (r2.ok) {
+          sim.mission = await r2.json();
+          renderMissionPanes();
+        }
+      } catch (_) {}
+    } catch (e) {
+      if (debriefRes) debriefRes.textContent = `! wigle upload failed: ${e}`;
+      pushLog("warn", `! wigle upload failed: ${e}`);
+    } finally {
+      btnMWigle.disabled = false;
     }
   });
 
