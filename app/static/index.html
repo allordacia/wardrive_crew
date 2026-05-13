@@ -231,6 +231,26 @@
           </p>
           <div id="features-list" class="features-list"></div>
         </div>
+        <div class="settings-section">
+          <div class="settings-section-head">&gt; wigle.net &mdash; debriefing upload credentials</div>
+          <p class="muted" style="margin:0;">
+            API name + token from
+            <span class="kbd">wigle.net &rarr; account &rarr; "show my token"</span>.
+            Stored locally in the settings table; the token is never echoed back
+            from the server.
+          </p>
+          <div class="settings-toolbar" style="flex-wrap: wrap; gap: 8px;">
+            <label class="lbl" for="wigle-name">NAME</label>
+            <input id="wigle-name" type="text" placeholder="AID..." style="width:180px;" />
+            <label class="lbl" for="wigle-token">TOKEN</label>
+            <input id="wigle-token" type="password" placeholder="(unset)" style="width:220px;" />
+            <label class="lbl" style="display:inline-flex; align-items:center; gap:4px;">
+              <input id="wigle-donate" type="checkbox" /> DONATE
+            </label>
+            <button id="btn-wigle-save" class="btn small primary">[S] SAVE</button>
+            <span id="wigle-status" class="muted">--</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -273,7 +293,7 @@
           <div id="mission-debrief-stats"></div>
           <div class="settings-toolbar" style="margin-top:8px;">
             <button id="btn-mission-backup" class="btn small">[B] BACKUP DB</button>
-            <button class="btn small" disabled title="lands in PR-B">[U] WIGLE UPLOAD</button>
+            <button id="btn-mission-wigle" class="btn small" title="upload mission's wifi observations to wigle.net">[U] WIGLE UPLOAD</button>
             <button id="btn-mission-dismiss" class="btn small primary">[D] DISMISS</button>
           </div>
           <div id="mission-debrief-result" style="margin-top:8px; font-size:13px; color: var(--ink-dim);"></div>

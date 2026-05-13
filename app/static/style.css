@@ -596,6 +596,14 @@ html, body {
   letter-spacing: 1px;
 }
 .settings-toolbar input::placeholder { color: var(--ink-faint); }
+.kbd {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 1px 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--frame);
+  color: var(--ink-dim);
+}
 .settings-toolbar select {
   padding: 7px 10px;
   background: var(--panel-2);
